@@ -1,0 +1,55 @@
+name: Pricing demo check
+on:
+  push:
+    branches: [main]
+    paths: ["src/**", "tests/**", "pyproject.toml", ".github/workflows/demo-check.yml"]
+  pull_request:
+    paths: ["src/**", "tests/**", "pyproject.toml", ".github/workflows/demo-check.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pricing-demo-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: src
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check available runtimes and source syntax
+        run: |
+          python3 --version
+          node --version
+          python3 -m py_compile src/txsenser_pricing/s1_demo.py
+          node --check src/txsenser_pricing/s1_static/app.js
+      - name: Check affected save and batch boundaries
+        run: |
+          python3 -m unittest discover -s tests -p 'test_s1_batch_error.py' -v
+          python3 -m unittest discover -s tests -p 'test_s1_postcommit_ack.py' -v
+          python3 -m unittest discover -s tests -p 'test_s1_committed_round_delta.py' -v
+      - name: Check four affected UI boundaries without browser or network
+        run: node tests/test_s1_frontend_safety.cjs '^F[1-4] '
+      - name: Check two synthetic interactions through the real loopback HTTP server
+        run: python3 -m unittest discover -s tests -p 'test_demo_http.py' -v
+      - name: Prepare only the browser driver
+        run: npm install --prefix "$RUNNER_TEMP/preview-driver" --no-save --ignore-scripts playwright@1.55.1
+      - name: Check one real browser save and reload with synthetic data
+        env:
+          NODE_PATH: ${{ runner.temp }}/preview-driver/node_modules
+          CHROME_PATH: /usr/bin/google-chrome
+        run: node tests/browser.cjs
+      - name: Retain one synthetic browser screenshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pricing-synthetic-browser-${{ github.sha }}
+          path: test-results/pricing-synthetic.png
+          if-no-files-found: error
+          retention-days: 7
+

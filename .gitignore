@@ -1,0 +1,14 @@
+.s1-demo/
+__pycache__/
+*.py[cod]
+*.sqlite*
+*.db
+.env
+.env.*
+.DS_Store
+build/
+dist/
+*.egg-info/
+test-results/
+node_modules/
+

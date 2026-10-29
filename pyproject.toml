@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "txsenser-pricing-demo"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "Offline synthetic pricing workbench demonstration"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+txsenser_pricing = ["s1_static/index.html", "s1_static/app.js", "s1_static/style.css"]
+
