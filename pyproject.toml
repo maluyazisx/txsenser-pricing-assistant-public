@@ -12,5 +12,5 @@ description = "Offline synthetic pricing workbench demonstration"
 where = ["src"]
 
 [tool.setuptools.package-data]
-txsenser_pricing = ["s1_static/index.html", "s1_static/app.js", "s1_static/style.css"]
+txsenser_pricing = ["s1_static/index.html", "s1_static/app.js", "s1_static/style.css", "s1_static/workbench.js"]
 

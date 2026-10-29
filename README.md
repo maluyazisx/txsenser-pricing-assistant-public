@@ -1,40 +1,15 @@
-# TxSenser Pricing Demo
+# 虚构价格工作台演示
 
-A small offline demonstration of a pricing workbench. All 30 price rows are invented examples. The assistant is a deterministic simulation, not a connected AI service. This snapshot does not read company pricing, customer records or mail.
-
-## Run the interactive demo
-
-Python 3.11 or newer is sufficient; no runtime packages are required.
+仅原创虚构数据和有限规则模拟，不包含真实价格/客户、真实AI、正式报价权威或外部汇率。
 
 ```sh
-PYTHONPATH=src python3 -m txsenser_pricing.s1_demo --db .s1-demo/synthetic.sqlite3 --port 8765
+PYTHONPATH=src python3 -m txsenser_pricing.s1_demo --db .s1-demo/fictional.sqlite3 --port 8765
 ```
 
-Open http://127.0.0.1:8765/ in the same computer's browser. The application deliberately binds only to loopback and checks the request host and origin. No public application server, tunnel, authentication service or real-data connection is configured.
+打开 http://127.0.0.1:8765/?matter=demo-workbench-v1 。同产品同配置的角色横向并排；选择角色、输入金额、Enter预览，再明确确认草稿。市场/档位/币种/单位不混合，缺价不补。原30行演示事项仍可选择。
 
-Try filtering by currency, selecting a synthetic row, changing its draft amount and pressing Enter. Compare selected rows using the simulated assistant. Draft history and conversations are kept in the separate local synthetic database. Do not enter private business data in this demonstration.
+在询价区选择虚构客户/项目/产品/数量和条件；缺项待补，有适用参考才可准备演示报价。预览和取消不入报价史，明确确认才记为“虚构已报价”。重新载入可查回，再次询价主动引用历史和条件差异。更正追加版本，旧版保留；报价不等于接受/合同/成交，历史不升级正式价格。
 
-## Focused checks
+SQLite仅在本机，GitHub代码和检查不是在线后台。默认Host/Origin限制保持；不要直接暴露公网。共享业务权威和真实业务功能不在本演示范围内。
 
-The standard GitHub-hosted Ubuntu workflow runs 18 save/batch checks, four simulated UI boundary checks and two real loopback HTTP checks, followed by one real-browser scenario. It needs no project secrets or external rate service and does not repeat a broader historical test suite.
-
-```sh
-PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_s1_batch_error.py' -v
-PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_s1_postcommit_ack.py' -v
-PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_s1_committed_round_delta.py' -v
-node tests/test_s1_frontend_safety.cjs '^F[1-4] '
-PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_demo_http.py' -v
-```
-
-The four focused UI checks use a simulated document and in-memory responses. The separate browser scenario starts the existing Python application on loopback, opens the page in the hosted runner's Chrome with its sandbox enabled, changes one invented draft amount, then reloads and confirms it remains saved. The workflow installs only the pinned Playwright 1.55.1 driver and retains one synthetic screenshot for seven days. It does not expose the application as a hosted service.
-
-A successful browser run establishes only that scenario for the checked snapshot. It does not establish business or production acceptance. No browser success is claimed until the workflow has actually completed.
-
-## Public snapshot scope
-
-This repository contains only the selected demo code and applicable synthetic tests. It has no original repository history, governance records, real pricing files or historical execution logs. External reference rates and commercial conversion assumptions are excluded from this offline snapshot.
-
-The interactive page requires the Python/SQLite API; copying its static assets to GitHub Pages does not provide a working interactive demo. No static-only product rewrite is included.
-
-Public visibility does not by itself grant a software license.
-
+新增检查分别覆盖实际Store/无监听HTTP处理器、使用响应模拟的页面逻辑；浏览器三场景流程只在现有获准标准云端检查运行，不把源码发布当业务验收。

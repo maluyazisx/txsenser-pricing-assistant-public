@@ -27,17 +27,13 @@ jobs:
         run: |
           python3 --version
           node --version
-          python3 -m py_compile src/txsenser_pricing/s1_demo.py
+          python3 -m py_compile src/txsenser_pricing/s1_demo.py src/txsenser_pricing/s1_workbench.py
           node --check src/txsenser_pricing/s1_static/app.js
-      - name: Check affected save and batch boundaries
-        run: |
-          python3 -m unittest discover -s tests -p 'test_s1_batch_error.py' -v
-          python3 -m unittest discover -s tests -p 'test_s1_postcommit_ack.py' -v
-          python3 -m unittest discover -s tests -p 'test_s1_committed_round_delta.py' -v
-      - name: Check four affected UI boundaries without browser or network
-        run: node tests/test_s1_frontend_safety.cjs '^F[1-4] '
-      - name: Check two synthetic interactions through the real loopback HTTP server
-        run: python3 -m unittest discover -s tests -p 'test_demo_http.py' -v
+          node --check src/txsenser_pricing/s1_static/workbench.js
+      - name: Check this business batch with actual synthetic Store
+        run: python3 -m unittest discover -s tests -p 'test_s1_workbench_batch.py' -v
+      - name: Check this page flow with a response double
+        run: node tests/test_s1_workbench_flow.cjs
       - name: Prepare only the browser driver
         run: npm install --prefix "$RUNNER_TEMP/preview-driver" --no-save --ignore-scripts playwright@1.55.1
       - name: Add Chinese fonts to the disposable cloud runner
@@ -45,7 +41,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends fonts-noto-cjk
           fc-match 'sans-serif:lang=zh-cn' | grep -q 'NotoSansCJK'
-      - name: Check one real browser save and reload with synthetic data
+      - name: Check one real browser three-scenario fictional business flow
         env:
           NODE_PATH: ${{ runner.temp }}/preview-driver/node_modules
           CHROME_PATH: /usr/bin/google-chrome

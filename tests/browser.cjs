@@ -48,6 +48,7 @@ async function stopServer(server) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pricing-synthetic-browser-'));
   const output = path.join(root, 'test-results');
   fs.mkdirSync(output, {recursive: true});
+  assert.ok(!fs.readFileSync(path.join(root,'src/txsenser_pricing/s1_static/index.html'),'utf8').includes('fx-panel'),'Only run against the reviewed sanitized no-FX public export');
   const {server, ready} = startServer(root, directory);
   let browser;
   try {
@@ -67,30 +68,48 @@ async function stopServer(server) {
     });
     await page.goto(origin + '/', {waitUntil: 'domcontentloaded'});
     await page.waitForFunction(() => document.getElementById('saveStatus').textContent.includes('已载入草稿'));
-    assert.equal(await page.locator('#rows tr').count(), 30);
-    await page.getByRole('checkbox', {name: '选中 SYN-02', exact: true}).check();
-    await page.waitForFunction(() => document.getElementById('saveStatus').textContent.includes('选择已记录'));
-    const price = page.getByRole('textbox', {name: 'SYN-02 拟调整价', exact: true});
-    await price.fill('1500.00');
-    const [response] = await Promise.all([
-      page.waitForResponse(response => response.url() === origin + '/api/action' && response.request().method() === 'POST'),
-      price.press('Enter')
-    ]);
-    assert.equal(response.status(), 200);
-    assert.equal((await response.json()).saved, true);
-    await page.waitForFunction(() => document.getElementById('saveStatus').textContent.includes('草稿修改已确认保存'));
-    await page.reload({waitUntil: 'domcontentloaded'});
-    await page.waitForFunction(() => document.getElementById('saveStatus').textContent.includes('已载入草稿'));
-    assert.equal(await price.inputValue(), '1500.00');
-    assert.match(await page.locator('#historyCount').innerText(), /1/);
+    const perform = async (op, action) => {
+      const waiting=page.waitForResponse(response=>response.url()===origin+'/api/action'&&response.request().method()==='POST'&&response.request().postDataJSON().op===op);
+      await action();const response=await waiting;assert.equal(response.status(),200);const data=await response.json();assert.equal(data.saved,true);
+      await page.waitForFunction(()=>typeof busy==='boolean'&&!busy&&!loading);return data;
+    };
+    assert.equal(await page.locator('#roleMatrix .role-group').count(),5);
+    assert.equal(await page.locator('#roleMatrix tbody tr').count(),6);
+    await perform('view',()=>page.locator('#roleMatrix input[type="checkbox"][data-row="MX-01-2"]').check());
+    const price=page.locator('#roleMatrix input.price[data-row="MX-01-2"]');await price.fill('2000.00');
+    const preview=await perform('draft_preview',()=>price.press('Enter'));
+    assert.equal(preview.matter.values['MX-01-2'],'2050.00');assert.equal(preview.matter.quote_records.length,0);
+    const adjusted=await perform('draft_confirm',()=>page.locator('#draftConfirm').click());
+    assert.equal(adjusted.matter.values['MX-01-2'],'2000.00');assert.equal(adjusted.matter.values['MX-01-1'],'2200.00');
+    assert.equal(adjusted.rows.find(r=>r.id==='MX-01-2').baseline,'2050.00');
+    const fillInquiry=async quantity=>{
+      for(const [id,value] of Object.entries({wbCustomer:'DEMO-C-A',wbProject:'DEMO-P-A',wbProduct:'DEMO-LUMEN',wbMarket:'国际',wbApplication:'通用工业',wbRole:'经销',wbCurrency:'USD',wbUnit:'台',wbConditions:'标准演示条件'}))await page.locator('#'+id).selectOption(value);
+      await page.locator('#wbQuantity').fill(quantity);
+    };
+    const missing=await perform('inquiry',()=>page.locator('#wbAnalyze').click());assert.equal(missing.analysis.status,'NEEDS_INFO');
+    await fillInquiry('5');const analysis=await perform('inquiry',()=>page.locator('#wbAnalyze').click());assert.equal(analysis.analysis.references[0].amount,'300.00');
+    const unsaved=await perform('quote_preview',()=>page.locator('#wbQuotePrepare').click());assert.equal(unsaved.matter.quote_records.length,0);
+    const canceled=await perform('quote_cancel',()=>page.locator('#wbQuoteCancel').click());assert.equal(canceled.matter.quote_records.length,0);
+    await perform('quote_preview',()=>page.locator('#wbQuotePrepare').click());await page.locator('#wbAcknowledged').check();
+    const confirmed=await perform('quote_confirm',()=>page.locator('#wbQuoteConfirm').click());const first=confirmed.record;assert.equal(first.phase,'quoted_demo');
+    await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>document.getElementById('saveStatus').textContent.includes('已载入草稿'));
+    assert.ok((await page.locator('#wbHistory').innerText()).includes(first.id));
+    await fillInquiry('10');const repeated=await perform('inquiry',()=>page.locator('#wbAnalyze').click());
+    assert.equal(repeated.analysis.history[0].id,first.id);assert.ok(repeated.analysis.history[0].differences.some(v=>v.includes('数量')));assert.equal(repeated.analysis.references[0].amount,'280.00');
+    await page.locator('#wbHistory details').first().locator('summary').click();await page.getByRole('button',{name:'准备更正（保留旧版）',exact:true}).click();
+    await page.locator('#wbQuantity').fill('10');await page.locator('#wbAmount').fill('290.00');await page.locator('#wbReason').selectOption('更正数量');
+    await perform('quote_preview',()=>page.locator('#wbQuotePrepare').click());await page.locator('#wbAcknowledged').check();
+    const corrected=await perform('quote_confirm',()=>page.locator('#wbQuoteConfirm').click());
+    assert.equal(corrected.record.id,first.id);assert.equal(corrected.record.version,2);assert.equal(corrected.matter.quote_records.length,2);assert.deepEqual(corrected.matter.quote_records[0],first);
+    assert.equal(corrected.matter.values['MX-04-3'],'280.00');
     assert.deepEqual(errors, []);
     assert.deepEqual(externalRequests, []);
     await price.scrollIntoViewIfNeeded();
-    await page.screenshot({path: path.join(output, 'pricing-synthetic.png')});
+    await page.screenshot({path: path.join(output, 'pricing-synthetic.png'),fullPage:true});
     console.log(JSON.stringify({status: 'SYNTHETIC_BROWSER_PASS',
       candidate: process.env.GITHUB_SHA || null, chromiumSandbox: true,
-      browser: browser.version(), rows: 30,
-      scenario: 'load_select_edit_save_reload', screenshot: 'test-results/pricing-synthetic.png',
+      browser: browser.version(), matrixRows:24,
+      scenario: 'matrix_preview_confirm_inquiry_quote_cancel_confirm_reload_reuse_append_correction', screenshot: 'test-results/pricing-synthetic.png',
       limit: 'Synthetic demonstration only; not business or production acceptance'}));
   } finally {
     try {

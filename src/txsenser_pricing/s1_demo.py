@@ -12,6 +12,8 @@ import time
 from urllib.parse import parse_qs, urlsplit
 import uuid
 
+from .s1_workbench import (CATALOG_ID, DEMO_MATTER, MATRIX_ROWS, CUSTOMERS, PROJECTS, ROLES, CONDITIONS, OPS,
+    WorkbenchRejected, analyze, prepare_quote, confirm_quote, replay_quote)
 
 MARKER = 'TXSENSER_S1_SYNTHETIC_ONLY_V1'
 STATIC = Path(__file__).with_name('s1_static')
@@ -80,12 +82,13 @@ def identity(row):
     return tuple(row[k] for k in FIELDS)
 
 
-def blocked(row):
+def blocked(row, rows=None):
+    rows = ROWS if rows is None else rows
     if row['source_status'] != 'synthetic_available':
         return row['risk'] + '；请补齐该范围的合成来源/档位后再编辑。'
     if any(row[k] is None for k in FIELDS if k != 'pn'):
         return '范围不完整；请明确缺失字段。'
-    if sum(identity(r) == identity(row) for r in ROWS) != 1:
+    if sum(identity(r) == identity(row) for r in rows) != 1:
         return '身份重复；请明确唯一配置/PN及范围。'
     return None
 
@@ -115,10 +118,18 @@ def visible(row, filters):
     return True
 
 
-def new_matter(mid, title, parent=None):
-    return dict(id=mid, title=title, parent=parent, created=now(), status='DRAFT / 合成未批准',
-        version=0, revision=0, values={r['id']: r['baseline'] for r in ROWS},
+def new_matter(mid, title, parent=None, fixture_set=None):
+    rows = MATRIX_ROWS if fixture_set == CATALOG_ID else ROWS
+    matter = dict(id=mid, title=title, parent=parent, created=now(), status='DRAFT / 合成未批准',
+        version=0, revision=0, values={r['id']: r['baseline'] for r in rows},
         selected=[], filters={}, conversation=[], history=[], requests={}, seen=[], mode='discussion', proposal=None, generation=0)
+    if fixture_set == CATALOG_ID:
+        matter.update(fixture_set=CATALOG_ID, quote_records=[], quote_receipts={}, quote_preview=None, draft_preview=None, inquiry=None)
+    return matter
+
+
+def catalog(matter):
+    return MATRIX_ROWS if matter.get('fixture_set') == CATALOG_ID else ROWS
 
 
 class OfflineProvider:
@@ -133,7 +144,7 @@ class OfflineProvider:
 
 
 class Store:
-    def __init__(self, path, provider=None, recover_pending=True):
+    def __init__(self, path, provider=None, recover_pending=True, matrix_demo=False):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self.path.exists():
@@ -152,6 +163,11 @@ class Store:
             db.execute('CREATE TABLE IF NOT EXISTS matters (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
             if not db.execute('SELECT 1 FROM matters').fetchone():
                 self.write(db, new_matter('demo-2026', '合成演示 · 第一轮'))
+            if matrix_demo:
+                if not db.execute('SELECT 1 FROM matters WHERE id=?', (DEMO_MATTER,)).fetchone():
+                    self.write(db, new_matter(DEMO_MATTER, '虚构工作台 · 横向角色体验', fixture_set=CATALOG_ID))
+                elif self.read(db, DEMO_MATTER).get('fixture_set') != CATALOG_ID:
+                    raise Rejected('演示事项身份不匹配，拒绝覆盖。')
             # A process restart never resumes a pending model response silently.
             for (payload,) in db.execute('SELECT payload FROM matters').fetchall():
                 m = json.loads(payload); changed = False
@@ -178,26 +194,44 @@ class Store:
         if not result: raise Rejected('事项不存在，拒绝跨事项操作。')
         return json.loads(result[0])
 
+    @staticmethod
+    def workbench_history(db):
+        history = []
+        for (payload,) in db.execute('SELECT payload FROM matters'):
+            matter = json.loads(payload)
+            if matter.get('fixture_set') == CATALOG_ID:
+                history.extend(dict(copy.deepcopy(record), matter_id=matter['id']) for record in matter.get('quote_records', []))
+        return history
+
     def state(self, mid):
         with self.connect() as db:
             m = self.read(db, mid)
             summaries = [dict(id=x['id'], title=x['title'], parent=x['parent'], created=x['created']) for x in [json.loads(p) for (p,) in db.execute('SELECT payload FROM matters')]]
-        return dict(marker=MARKER, matter=m, matters=summaries,
-            rows=[dict(r, blocked=blocked(r)) for r in ROWS], visible_ids=[r['id'] for r in ROWS if visible(r,m['filters'])], provider='offline-deterministic-mock')
+            history = self.workbench_history(db) if m.get('fixture_set') == CATALOG_ID else []
+        rows = catalog(m)
+        result = dict(marker=MARKER, matter=m, matters=summaries,
+            rows=[dict(r, blocked=blocked(r, rows)) for r in rows], visible_ids=[r['id'] for r in rows if visible(r,m['filters'])], provider='offline-deterministic-mock')
+        if m.get('fixture_set') == CATALOG_ID:
+            products = {r['product_id']: dict(id=r['product_id'], label=r['family']+' / '+r['configuration']) for r in rows}
+            result.update(workbench_history=history, workbench=dict(customers=CUSTOMERS, projects=PROJECTS,
+                products=list(products.values()), roles=ROLES, conditions=CONDITIONS))
+        return result
 
     def context(self, m):
-        selected = [dict(ROW_BY_ID[rid], draft=m['values'][rid]) for rid in m['selected'] if visible(ROW_BY_ID[rid], m['filters'])]
+        by_id = {r['id']: r for r in catalog(m)}
+        selected = [dict(by_id[rid], draft=m['values'][rid]) for rid in m['selected'] if visible(by_id[rid], m['filters'])]
         return dict(matter=m['id'], revision=m['revision'], selected=selected, filters=m['filters'], recent=m['conversation'][-8:])
 
-    def edits(self, m, edits, actor):
-        if not isinstance(edits, list) or not 1 <= len(edits) <= len(ROWS): raise Rejected('需要1–30条精确行编辑。')
+    def checked_edits(self, m, edits):
+        rows = catalog(m); by_id = {r['id']: r for r in rows}
+        if not isinstance(edits, list) or not 1 <= len(edits) <= len(rows): raise Rejected(f'需要1–{len(rows)}条精确行编辑。')
         checked = []; ids = set()
         for position, edit in enumerate(edits, 1):
-            rid = edit.get('id'); row = ROW_BY_ID.get(rid)
+            rid = edit.get('id'); row = by_id.get(rid)
             if not row or rid in ids: raise Rejected('行不存在或批次含重复行；整批未保存。')
             ids.add(rid)
             if rid not in m['selected'] or not visible(row, m['filters']): raise Rejected(f'{rid} 不在当前已选且可见范围；整批未保存。')
-            reason = blocked(row)
+            reason = blocked(row, rows)
             if reason: raise Rejected(f'{rid}：{reason} 整批未保存。')
             if edit.get('scope') != {k: row[k] for k in FIELDS}: raise Rejected(f'{rid} 范围不匹配；整批未保存。')
             if edit.get('old') != m['values'][rid]: raise Rejected(f'{rid} 旧值已变化；刷新后重试。')
@@ -206,9 +240,20 @@ class Store:
             except Rejected as e:
                 raise Rejected(f'第{position}行（{rid}）：{e} 整批未保存。') from e
             checked.append(dict(id=rid, old=m['values'][rid], new=new_value, scope=edit['scope']))
+        return checked
+
+    def edits(self, m, edits, actor):
+        checked = self.checked_edits(m, edits)
         for e in checked: m['values'][e['id']] = e['new']
         m['revision'] += 1
         m['history'].append(dict(revision=m['revision'], at=now(), actor=actor, edits=checked, undone=False))
+
+    def preview_draft(self, m, edits):
+        checked = self.checked_edits(m, edits)
+        m['draft_preview'] = dict(token=uuid.uuid4().hex, prepared_version=m['version'] + 1,
+            revision=m['revision'], selected=m['selected'][:], filters=copy.deepcopy(m['filters']),
+            generation=m['generation'], edits=checked)
+        return copy.deepcopy(m['draft_preview'])
 
     def action(self, req):
         if not isinstance(req, dict): raise Rejected('请求必须是对象。')
@@ -217,18 +262,32 @@ class Store:
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             m = self.read(db, mid)
+            rows = catalog(m); by_id = {r['id']: r for r in rows}
+            if m.get('fixture_set') == CATALOG_ID:
+                try:
+                    replay = replay_quote(m, req)
+                except WorkbenchRejected as e:
+                    raise Rejected(str(e)) from e
+                if replay:
+                    db.rollback()
+                    try:
+                        return dict(self.state(mid), saved=True, request_id=request_id, **replay)
+                    except Exception as e:
+                        raise CommittedUnconfirmed(request_id, replay) from e
             if request_id in m['seen']: raise Rejected('重复请求已阻断；不会再次应用。')
             if req.get('version') != m['version']: raise Rejected('并发版本冲突；未保存。请重新载入最新事项。')
             result = {}
             if op == 'view':
                 selected, filters = req.get('selected'), req.get('filters')
-                if not isinstance(selected, list) or len(set(selected)) != len(selected) or any(x not in ROW_BY_ID for x in selected): raise Rejected('选择包含未知或重复行。')
+                if not isinstance(selected, list) or len(set(selected)) != len(selected) or any(x not in by_id for x in selected): raise Rejected('选择包含未知或重复行。')
                 filters=validate_filters(filters)
                 # Never silently keep hidden selected rows in the editing scope.
-                m['filters'] = filters; m['selected'] = [x for x in selected if visible(ROW_BY_ID[x], filters)]
+                m['filters'] = filters; m['selected'] = [x for x in selected if visible(by_id[x], filters)]
             elif op == 'edit':
+                if m.get('fixture_set') == CATALOG_ID: raise Rejected('横向工作台需先预览范围，再明确确认草稿。')
                 self.edits(m, req.get('edits'), 'manual')
             elif op == 'undo':
+                if m.get('fixture_set') == CATALOG_ID: raise Rejected('请通过预览修改恢复草稿金额，不能跳过确认。')
                 h = next((x for x in reversed(m['history']) if not x['undone'] and x['actor'] != 'undo'), None)
                 if h is None: raise Rejected('没有可撤销的修改。')
                 if any(m['values'][e['id']] != e['new'] for e in h['edits']): raise Rejected('当前值与历史不一致，拒绝撤销。')
@@ -242,7 +301,10 @@ class Store:
                     proposal=m['proposal']
                     if proposal.get('generation') != m.get('generation',0) or proposal['revision'] != m['revision'] or proposal['selected'] != m['selected'] or proposal['filters'] != m['filters']:
                         raise Rejected('建议已过期；请按最新草稿和范围重新讨论。')
-                    self.edits(m, proposal['edits'], 'explicit_start_adjustment')
+                    if m.get('fixture_set') == CATALOG_ID:
+                        result['draft_preview'] = self.preview_draft(m, proposal['edits'])
+                    else:
+                        self.edits(m, proposal['edits'], 'explicit_start_adjustment')
                     m['proposal']=None
                 m['mode'] = req['mode']
             elif op == 'ai_begin':
@@ -262,17 +324,18 @@ class Store:
                         if any(r['currency'] != currency or r['unit'] != unit for r in context['selected']): raise Rejected('币种/单位不一致；请筛选同一币种与单位。未换算，整批未保存。')
                         targets=[]
                         for r in context['selected']:
-                            if blocked(r): raise Rejected(f"{r['id']}：{blocked(r)}")
+                            if blocked(r, rows): raise Rejected(f"{r['id']}：{blocked(r, rows)}")
                             new_value=amount(str(Decimal(r['draft'])+Decimal(value))) if match else amount(value)
                             targets.append(dict(id=r['id'], old=r['draft'], new=new_value, scope={k:r[k] for k in FIELDS}))
-                        if match: edits=targets
+                        if match and m.get('fixture_set') != CATALOG_ID: edits=targets
                         else: proposal_edits=targets
                     answer = self.provider.respond(context)
                     if raw.startswith('检索原文 '):
                         excerpts=self.search(mid,raw[len('检索原文 '):])
                         answer='模拟原文检索（当前与关联上一轮，最多30条）：\n'+'\n'.join(f"{e['at']} [{e['matter']}; {'旧轮次草稿，非当前价' if e['historical'] else '当前事项'}] {e['text']}" for e in excerpts)
                         if not excerpts: answer+='已查范围内未找到；不推断其他事项不存在记录。'
-                    if suggestion: answer='仅讨论的合成建议已准备；草稿金额未变。主动点击“开始调整价格”才按当前精确范围采纳。'
+                    if m.get('fixture_set') == CATALOG_ID and (match or suggestion): answer='有限模拟修改建议已准备，草稿未变；请预览范围并明确确认后保存。'
+                    elif suggestion: answer='仅讨论的合成建议已准备；草稿金额未变。主动点击“开始调整价格”才按当前精确范围采纳。'
                 except Rejected as e:
                     edits=[]; proposal_edits=[]; blocked_answer=str(e)
                     answer='模拟回应阻断：'+blocked_answer+' 草稿未变。'
@@ -294,10 +357,38 @@ class Store:
                         m['proposal']=dict(edits=pending['proposal_edits'],generation=m['generation'],revision=m['revision'],selected=m['selected'][:],filters=copy.deepcopy(m['filters']))
                     pending['status'] = 'completed'
                     m['conversation'].append(dict(at=now(), role='assistant', text='模拟AI明确命令已写入同一合成草稿；未批准、未发布。' if pending['edits'] else pending['answer'], request=token))
+            elif op in OPS:
+                if m.get('fixture_set') != CATALOG_ID:
+                    raise Rejected('此操作仅用于新的虚构工作台事项。')
+                try:
+                    if op == 'draft_preview':
+                        result['draft_preview'] = self.preview_draft(m, req.get('edits'))
+                    elif op == 'draft_cancel':
+                        m['draft_preview'] = None
+                    elif op == 'draft_confirm':
+                        preview = m.get('draft_preview')
+                        if not preview or req.get('token') != preview['token'] or preview['prepared_version'] != m['version']:
+                            raise Rejected('草稿预览已失效；请重新预览范围与新旧值。')
+                        if any(preview[key] != m[key] for key in ('revision', 'selected', 'filters', 'generation')):
+                            raise Rejected('预览范围或草稿已变化；请重新确认。')
+                        self.edits(m, preview['edits'], 'manual_preview_confirmed')
+                        result['confirmed_token'] = preview['token']
+                        m['draft_preview'] = None
+                    elif op == 'inquiry':
+                        m['inquiry'] = analyze(req.get('terms'), rows, self.workbench_history(db))
+                        result['analysis'] = copy.deepcopy(m['inquiry'])
+                    elif op == 'quote_preview':
+                        result.update(prepare_quote(m, req, self.workbench_history(db), amount))
+                    elif op == 'quote_cancel':
+                        m['quote_preview'] = None
+                    elif op == 'quote_confirm':
+                        result.update(confirm_quote(m, req, now()))
+                except WorkbenchRejected as e:
+                    raise Rejected(str(e)) from e
             elif op == 'new_round':
                 title = req.get('title')
                 if not isinstance(title, str) or not title.strip() or len(title)>120: raise Rejected('请输入1–120字事项标题。')
-                created = new_matter('demo-'+uuid.uuid4().hex[:12], title, mid)
+                created = new_matter('demo-'+uuid.uuid4().hex[:12], title, mid, m.get('fixture_set'))
                 self.write(db, created); result['new_matter'] = created['id']
             else: raise Rejected('未知操作。')
             m['version'] += 1; m['seen'].append(request_id)
@@ -356,7 +447,7 @@ def handler(store):
             try:
                 if url.path == '/api/state': return self.send(200, store.state(query.get('matter',['demo-2026'])[0]))
                 if url.path == '/api/search': return self.send(200, store.search(query.get('matter',['demo-2026'])[0],query.get('q',[''])[0]))
-                files={'/':'index.html','/app.js':'app.js','/style.css':'style.css'}
+                files={'/':'index.html','/app.js':'app.js','/workbench.js':'workbench.js','/style.css':'style.css'}
                 if url.path not in files: return self.send(404,{'error':'Not found'})
                 ext = files[url.path].split('.')[-1]
                 mime={'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8'}[ext]
@@ -391,7 +482,7 @@ def main():
         Path(args.db).parent.mkdir(parents=True,exist_ok=True,mode=0o700)
         with sqlite3.connect(args.db) as dest: source.backup(dest)
         source.close()
-    store=Store(args.db,recover_pending=not bool(args.backup))
+    store=Store(args.db,recover_pending=not bool(args.backup), matrix_demo=not bool(args.backup or args.restore))
     if args.backup: store.backup(args.backup); print('Synthetic backup saved.'); return
     if args.restore: print('Synthetic backup restored to new destination.'); return
     server=ThreadingHTTPServer(('127.0.0.1',args.port),handler(store))
