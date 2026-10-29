@@ -40,6 +40,11 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_demo_http.py' -v
       - name: Prepare only the browser driver
         run: npm install --prefix "$RUNNER_TEMP/preview-driver" --no-save --ignore-scripts playwright@1.55.1
+      - name: Add Chinese fonts to the disposable cloud runner
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          fc-match 'sans-serif:lang=zh-cn' | grep -q 'NotoSansCJK'
       - name: Check one real browser save and reload with synthetic data
         env:
           NODE_PATH: ${{ runner.temp }}/preview-driver/node_modules
