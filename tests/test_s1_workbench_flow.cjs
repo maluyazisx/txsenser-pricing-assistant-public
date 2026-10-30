@@ -13,7 +13,8 @@ function fixture(){
 }
 const clone=x=>JSON.parse(JSON.stringify(x));
 function analysis(terms,m){
- const missing=Object.entries(terms).filter(([,v])=>!v).map(([k])=>k),quantity=Number(terms.quantity),value=quantity>=10?'280.00':'300.00';
+ const labels={customer_id:'客户',project_id:'项目',product_id:'产品配置',market:'市场',application:'应用',role:'价格类型',quantity:'数量',currency:'币种',unit:'单位',conditions:'商业条件'};
+ const missing=Object.entries(terms).filter(([,v])=>!v).map(([k])=>labels[k]),quantity=Number(terms.quantity),value=quantity>=10?'280.00':'300.00';
  return {terms:clone(terms),status:missing.length?'NEEDS_INFO':'AVAILABLE_DEMO',missing,reason:missing.length?'请补齐条件':'虚构参考可用于页面流程',references:missing.length?[]:[{id:quantity>=10?'MX-04-3':'MX-03-3',amount:value,currency:'USD',unit:'台',role:'经销',tier:quantity>=10?'10–49':'1–9',source:'虚构页面夹具',approval:'未批准'}],history:m.quote_records.length?[{id:m.quote_records[0].id,version:1,amount:'300.00',currency:'USD',unit:'台',differences:quantity===5?[]:['数量：历史 5 → 本次 '+quantity],reason:'条件不同不自动沿用',warning:'已报价非成交'}]:[]};
 }
 class Element{
@@ -24,9 +25,9 @@ class Element{
  addEventListener(key,fn){this['on'+key]=fn;}
 }
 const descend=n=>[n,...n.children.filter(x=>x instanceof Element).flatMap(descend)];
-async function harness(){
- const ids=new Map();let server=fixture();
- for(const match of html.matchAll(/id="([^"]+)"/g))ids.set(match[1],new Element('div'));
+async function harness(initial=fixture()){
+ const ids=new Map();let server=clone(initial);
+ for(const match of html.matchAll(/<([a-z][a-z0-9]*)\b([^>]*?)\bid="([^"]+)"([^>]*)>/gi)){const element=new Element(match[1]);element.hidden=/\bhidden\b/.test(match[2]+match[4]);element.disabled=/\bdisabled\b/.test(match[2]+match[4]);ids.set(match[3],element);}
  const document={getElementById:id=>ids.get(id)||[...ids.values()].flatMap(descend).find(n=>n.id===id)||null,createElement:tag=>new Element(tag)};
  const calls=[],storage=new Map();let serial=0;
  const h={document,calls,failQuoteReadback:false};
@@ -128,5 +129,6 @@ test('WB1 edits during quote preview keep the new input dirty until a fresh prev
   assert.equal(h.snapshot().matter.quote_records.length,1);assert.equal(h.snapshot().matter.quote_records[0].amount,'999.00');
  }finally{h.cleanup();}
 });
-(async()=>{const selected=tests.filter(({name})=>!process.argv.includes('--wb1-only')||name.startsWith('WB1 '));let failed=0;for(const {name,fn} of selected){try{await fn();console.log('PASS '+name);}catch(e){failed++;console.error('FAIL '+name+'\n'+e.stack);}}console.log(JSON.stringify({tests:selected.length,passed:selected.length-failed,failed,actualStore:false,responseDouble:true,listener:false,browser:false,externalNetwork:false}));process.exitCode=failed?1:0;})();
+module.exports={harness,fixture};
+if(require.main===module)(async()=>{const selected=tests.filter(({name})=>!process.argv.includes('--wb1-only')||name.startsWith('WB1 '));let failed=0;for(const {name,fn} of selected){try{await fn();console.log('PASS '+name);}catch(e){failed++;console.error('FAIL '+name+'\n'+e.stack);}}console.log(JSON.stringify({tests:selected.length,passed:selected.length-failed,failed,actualStore:false,responseDouble:true,listener:false,browser:false,externalNetwork:false}));process.exitCode=failed?1:0;})();
 

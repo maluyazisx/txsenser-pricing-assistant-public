@@ -33,7 +33,7 @@ jobs:
       - name: Check this business batch with actual synthetic Store
         run: python3 -m unittest discover -s tests -p 'test_s1_workbench_batch.py' -v
       - name: Check this page flow with a response double
-        run: node tests/test_s1_workbench_flow.cjs
+        run: node tests/test_s1_compact.cjs && node tests/test_s1_fx_manual.cjs
       - name: Prepare only the browser driver
         run: npm install --prefix "$RUNNER_TEMP/preview-driver" --no-save --ignore-scripts playwright@1.55.1
       - name: Add Chinese fonts to the disposable cloud runner

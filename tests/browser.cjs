@@ -48,7 +48,8 @@ async function stopServer(server) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pricing-synthetic-browser-'));
   const output = path.join(root, 'test-results');
   fs.mkdirSync(output, {recursive: true});
-  assert.ok(!fs.readFileSync(path.join(root,'src/txsenser_pricing/s1_static/index.html'),'utf8').includes('fx-panel'),'Only run against the reviewed sanitized no-FX public export');
+  assert.ok(!fs.readFileSync(path.join(root,'src/txsenser_pricing/s1_demo.py'),'utf8').includes("parser.add_argument('--price-copy')"),'Only run against reviewed public export');
+  assert.ok(!/\bfetch\s*\(/.test(fs.readFileSync(path.join(root,'src/txsenser_pricing/s1_static/fx.js'),'utf8')),'Manual reference converter must not request external rates');
   const {server, ready} = startServer(root, directory);
   let browser;
   try {
@@ -58,7 +59,7 @@ async function stopServer(server) {
       chromiumSandbox: true,
       headless: true
     });
-    const page = await browser.newPage({viewport: {width: 1440, height: 960}});
+    const page = await browser.newPage({viewport: {width: 1440, height: 900}});
     const errors = [], externalRequests = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/*', route => {
@@ -67,17 +68,21 @@ async function stopServer(server) {
       return route.abort();
     });
     await page.goto(origin + '/', {waitUntil: 'domcontentloaded'});
-    await page.waitForFunction(() => document.getElementById('saveStatus').textContent.includes('已载入草稿'));
+    await page.waitForFunction(() => document.getElementById('saveStatus').textContent.includes('价格已载入'));
     const perform = async (op, action) => {
       const waiting=page.waitForResponse(response=>response.url()===origin+'/api/action'&&response.request().method()==='POST'&&response.request().postDataJSON().op===op);
       await action();const response=await waiting;assert.equal(response.status(),200);const data=await response.json();assert.equal(data.saved,true);
       await page.waitForFunction(()=>typeof busy==='boolean'&&!busy&&!loading);return data;
     };
-    assert.equal(await page.locator('#roleMatrix .role-group').count(),5);
+    assert.equal(await page.locator('#roleMatrix .role-group').count(),1);
+    assert.equal(await page.locator('#roleMatrix thead th').count(),8);
+    assert.equal(await page.locator('#discussionPanel').isVisible(),false);
+    const layout=await page.evaluate(()=>{const table=document.querySelector('.role-table'),rows=[...table.tBodies[0].rows],heads=[...table.tHead.rows[0].cells];return {lastColumnRight:heads.at(-1).getBoundingClientRect().right,viewport:innerWidth,visibleProducts:rows.filter(row=>row.getBoundingClientRect().bottom<=innerHeight&&row.getBoundingClientRect().top>=0).length,maxRowHeight:Math.max(...rows.map(row=>row.getBoundingClientRect().height)),fontSize:parseFloat(getComputedStyle(table).fontSize),stickyProduct:getComputedStyle(rows[0].cells[0]).position,stickyHeader:getComputedStyle(heads[0]).position};});
+    assert.ok(layout.lastColumnRight<=layout.viewport-8,'All price types fit at normal desktop width');assert.ok(layout.visibleProducts>=4,'Several products must fit in the first viewport');assert.ok(layout.maxRowHeight<=90);assert.ok(layout.fontSize>=13);assert.equal(layout.stickyProduct,'sticky');assert.equal(layout.stickyHeader,'sticky');
     assert.equal(await page.locator('#roleMatrix tbody tr').count(),6);
     await perform('view',()=>page.locator('#roleMatrix input[type="checkbox"][data-row="MX-01-2"]').check());
-    const price=page.locator('#roleMatrix input.price[data-row="MX-01-2"]');await price.fill('2000.00');
-    const preview=await perform('draft_preview',()=>price.press('Enter'));
+    await page.locator('#adjust').click();const price=page.locator('#roleMatrix input.price[data-row="MX-01-2"]');await price.fill('2000.00');
+    const preview=await perform('draft_preview',()=>page.locator('#previewSelected').click());
     assert.equal(preview.matter.values['MX-01-2'],'2050.00');assert.equal(preview.matter.quote_records.length,0);
     const adjusted=await perform('draft_confirm',()=>page.locator('#draftConfirm').click());
     assert.equal(adjusted.matter.values['MX-01-2'],'2000.00');assert.equal(adjusted.matter.values['MX-01-1'],'2200.00');
@@ -86,16 +91,20 @@ async function stopServer(server) {
       for(const [id,value] of Object.entries({wbCustomer:'DEMO-C-A',wbProject:'DEMO-P-A',wbProduct:'DEMO-LUMEN',wbMarket:'国际',wbApplication:'通用工业',wbRole:'经销',wbCurrency:'USD',wbUnit:'台',wbConditions:'标准演示条件'}))await page.locator('#'+id).selectOption(value);
       await page.locator('#wbQuantity').fill(quantity);
     };
+    await page.locator('#openInquiry').click();
     const missing=await perform('inquiry',()=>page.locator('#wbAnalyze').click());assert.equal(missing.analysis.status,'NEEDS_INFO');
     await fillInquiry('5');const analysis=await perform('inquiry',()=>page.locator('#wbAnalyze').click());assert.equal(analysis.analysis.references[0].amount,'300.00');
+    await page.locator('#openQuote').click();
     const unsaved=await perform('quote_preview',()=>page.locator('#wbQuotePrepare').click());assert.equal(unsaved.matter.quote_records.length,0);
     const canceled=await perform('quote_cancel',()=>page.locator('#wbQuoteCancel').click());assert.equal(canceled.matter.quote_records.length,0);
     await perform('quote_preview',()=>page.locator('#wbQuotePrepare').click());await page.locator('#wbAcknowledged').check();
     const confirmed=await perform('quote_confirm',()=>page.locator('#wbQuoteConfirm').click());const first=confirmed.record;assert.equal(first.phase,'quoted_demo');
-    await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>document.getElementById('saveStatus').textContent.includes('已载入草稿'));
-    assert.ok((await page.locator('#wbHistory').innerText()).includes(first.id));
+    await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>document.getElementById('saveStatus').textContent.includes('价格已载入'));
+    await page.locator('#openHistory').click();assert.ok((await page.locator('#wbHistory').innerText()).includes(first.id));
+    await page.locator('#openInquiry').click();
     await fillInquiry('10');const repeated=await perform('inquiry',()=>page.locator('#wbAnalyze').click());
     assert.equal(repeated.analysis.history[0].id,first.id);assert.ok(repeated.analysis.history[0].differences.some(v=>v.includes('数量')));assert.equal(repeated.analysis.references[0].amount,'280.00');
+    await page.locator('#openHistory').click();
     await page.locator('#wbHistory details').first().locator('summary').click();await page.getByRole('button',{name:'准备更正（保留旧版）',exact:true}).click();
     await page.locator('#wbQuantity').fill('10');await page.locator('#wbAmount').fill('290.00');await page.locator('#wbReason').selectOption('更正数量');
     await perform('quote_preview',()=>page.locator('#wbQuotePrepare').click());await page.locator('#wbAcknowledged').check();
@@ -104,11 +113,11 @@ async function stopServer(server) {
     assert.equal(corrected.matter.values['MX-04-3'],'280.00');
     assert.deepEqual(errors, []);
     assert.deepEqual(externalRequests, []);
-    await price.scrollIntoViewIfNeeded();
-    await page.screenshot({path: path.join(output, 'pricing-synthetic.png'),fullPage:true});
+    await page.locator('#showRoleMatrix').click();await page.evaluate(()=>scrollTo(0,0));
+    await page.screenshot({path: path.join(output, 'pricing-synthetic.png'),fullPage:false});
     console.log(JSON.stringify({status: 'SYNTHETIC_BROWSER_PASS',
       candidate: process.env.GITHUB_SHA || null, chromiumSandbox: true,
-      browser: browser.version(), matrixRows:24,
+      browser: browser.version(), matrixRows:42,
       scenario: 'matrix_preview_confirm_inquiry_quote_cancel_confirm_reload_reuse_append_correction', screenshot: 'test-results/pricing-synthetic.png',
       limit: 'Synthetic demonstration only; not business or production acceptance'}));
   } finally {

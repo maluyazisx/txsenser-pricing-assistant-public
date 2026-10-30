@@ -12,10 +12,11 @@ import time
 from urllib.parse import parse_qs, urlsplit
 import uuid
 
-from .s1_workbench import (CATALOG_ID, DEMO_MATTER, MATRIX_ROWS, CUSTOMERS, PROJECTS, ROLES, CONDITIONS, OPS,
+from .s1_workbench import (CATALOG_ID, DEMO_MATTER, MATRIX_ROWS, LEGACY_MATRIX_ROWS, CUSTOMERS, PROJECTS, ROLES, PRICE_TYPE_ORDER, PRICE_TYPE_LABELS, CONDITIONS, OPS,
     WorkbenchRejected, analyze, prepare_quote, confirm_quote, replay_quote)
 
 MARKER = 'TXSENSER_S1_SYNTHETIC_ONLY_V1'
+PRIVATE_COPY_MARKER = 'TXSENSER_PRICING_PRIVATE_EXPERIENCE_V1'
 STATIC = Path(__file__).with_name('s1_static')
 FIELDS = ('family', 'kind', 'configuration', 'pn', 'market', 'application', 'role', 'tier', 'currency', 'unit')
 CATEGORY_FILTERS = ('family', 'kind', 'market', 'application', 'role', 'tier', 'currency', 'unit')
@@ -124,12 +125,14 @@ def new_matter(mid, title, parent=None, fixture_set=None):
         version=0, revision=0, values={r['id']: r['baseline'] for r in rows},
         selected=[], filters={}, conversation=[], history=[], requests={}, seen=[], mode='discussion', proposal=None, generation=0)
     if fixture_set == CATALOG_ID:
-        matter.update(fixture_set=CATALOG_ID, quote_records=[], quote_receipts={}, quote_preview=None, draft_preview=None, inquiry=None)
+        matter.update(fixture_set=CATALOG_ID, catalog_revision=2, quote_records=[], quote_receipts={}, quote_preview=None, draft_preview=None, inquiry=None)
     return matter
 
 
 def catalog(matter):
-    return MATRIX_ROWS if matter.get('fixture_set') == CATALOG_ID else ROWS
+    if matter.get('private_rows') is not None: return matter['private_rows']
+    if matter.get('fixture_set') != CATALOG_ID: return ROWS
+    return MATRIX_ROWS if matter.get('catalog_revision') == 2 else LEGACY_MATRIX_ROWS
 
 
 class OfflineProvider:
@@ -144,13 +147,14 @@ class OfflineProvider:
 
 
 class Store:
-    def __init__(self, path, provider=None, recover_pending=True, matrix_demo=False):
+    def __init__(self, path, provider=None, recover_pending=True, matrix_demo=False, experience=None):
+        self.marker = PRIVATE_COPY_MARKER if experience is not None else MARKER
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self.path.exists():
             try:
                 with sqlite3.connect(f'file:{self.path.resolve()}?mode=ro',uri=True) as existing:
-                    if existing.execute('SELECT marker FROM meta').fetchall() != [(MARKER,)]:
+                    if existing.execute('SELECT marker FROM meta').fetchall() != [(self.marker,)]:
                         raise Rejected('非S1合成存储，拒绝打开。')
             except sqlite3.Error as e:
                 raise Rejected('无法验证S1合成存储标记；拒绝修改。') from e
@@ -158,16 +162,23 @@ class Store:
         with self.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS meta (marker TEXT NOT NULL)')
             marker = db.execute('SELECT marker FROM meta').fetchall()
-            if not marker: db.execute('INSERT INTO meta VALUES (?)', (MARKER,))
-            elif marker != [(MARKER,)]: raise Rejected('非S1合成存储，拒绝打开。')
+            if not marker: db.execute('INSERT INTO meta VALUES (?)', (self.marker,))
+            elif marker != [(self.marker,)]: raise Rejected('存储身份不匹配，拒绝打开。')
             db.execute('CREATE TABLE IF NOT EXISTS matters (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
             if not db.execute('SELECT 1 FROM matters').fetchone():
                 self.write(db, new_matter('demo-2026', '合成演示 · 第一轮'))
             if matrix_demo:
                 if not db.execute('SELECT 1 FROM matters WHERE id=?', (DEMO_MATTER,)).fetchone():
-                    self.write(db, new_matter(DEMO_MATTER, '虚构工作台 · 横向角色体验', fixture_set=CATALOG_ID))
+                    self.write(db, new_matter(DEMO_MATTER, '价格总览', fixture_set=CATALOG_ID))
                 elif self.read(db, DEMO_MATTER).get('fixture_set') != CATALOG_ID:
                     raise Rejected('演示事项身份不匹配，拒绝覆盖。')
+            if experience is not None:
+                copy_id = 'experience-' + experience['copy_sha256'][:16]
+                if not db.execute('SELECT 1 FROM matters WHERE id=?', (copy_id,)).fetchone():
+                    m = new_matter(copy_id, '价格体验副本', fixture_set=CATALOG_ID)
+                    m.update(private_rows=copy.deepcopy(experience['rows']), values={r['id']:r['baseline'] for r in experience['rows']},
+                             data_kind='private_experience', copy_sha256=experience['copy_sha256'], persona=experience['persona'])
+                    self.write(db, m)
             # A process restart never resumes a pending model response silently.
             for (payload,) in db.execute('SELECT payload FROM matters').fetchall():
                 m = json.loads(payload); changed = False
@@ -209,12 +220,13 @@ class Store:
             summaries = [dict(id=x['id'], title=x['title'], parent=x['parent'], created=x['created']) for x in [json.loads(p) for (p,) in db.execute('SELECT payload FROM matters')]]
             history = self.workbench_history(db) if m.get('fixture_set') == CATALOG_ID else []
         rows = catalog(m)
-        result = dict(marker=MARKER, matter=m, matters=summaries,
+        result = dict(marker=self.marker, matter=m, matters=summaries,
             rows=[dict(r, blocked=blocked(r, rows)) for r in rows], visible_ids=[r['id'] for r in rows if visible(r,m['filters'])], provider='offline-deterministic-mock')
         if m.get('fixture_set') == CATALOG_ID:
             products = {r['product_id']: dict(id=r['product_id'], label=r['family']+' / '+r['configuration']) for r in rows}
             result.update(workbench_history=history, workbench=dict(customers=CUSTOMERS, projects=PROJECTS,
-                products=list(products.values()), roles=ROLES, conditions=CONDITIONS))
+                products=list(products.values()), roles=[role for role in PRICE_TYPE_ORDER if any(r['role']==role for r in rows)],
+                price_type_labels=PRICE_TYPE_LABELS, conditions=sorted({r['conditions'] for r in rows if isinstance(r.get('conditions'),str) and r['conditions']}) if m.get('data_kind')=='private_experience' else CONDITIONS))
         return result
 
     def context(self, m):
@@ -232,6 +244,7 @@ class Store:
             ids.add(rid)
             if rid not in m['selected'] or not visible(row, m['filters']): raise Rejected(f'{rid} 不在当前已选且可见范围；整批未保存。')
             reason = blocked(row, rows)
+            if row.get('copy_editable') is False: raise Rejected('此权限只能查看价格，不能调整标准价格。')
             if reason: raise Rejected(f'{rid}：{reason} 整批未保存。')
             if edit.get('scope') != {k: row[k] for k in FIELDS}: raise Rejected(f'{rid} 范围不匹配；整批未保存。')
             if edit.get('old') != m['values'][rid]: raise Rejected(f'{rid} 旧值已变化；刷新后重试。')
@@ -378,7 +391,7 @@ class Store:
                         m['inquiry'] = analyze(req.get('terms'), rows, self.workbench_history(db))
                         result['analysis'] = copy.deepcopy(m['inquiry'])
                     elif op == 'quote_preview':
-                        result.update(prepare_quote(m, req, self.workbench_history(db), amount))
+                        result.update(prepare_quote(m, req, self.workbench_history(db), amount, rows))
                     elif op == 'quote_cancel':
                         m['quote_preview'] = None
                     elif op == 'quote_confirm':
@@ -389,6 +402,11 @@ class Store:
                 title = req.get('title')
                 if not isinstance(title, str) or not title.strip() or len(title)>120: raise Rejected('请输入1–120字事项标题。')
                 created = new_matter('demo-'+uuid.uuid4().hex[:12], title, mid, m.get('fixture_set'))
+                if m.get('private_rows') is not None:
+                    created.update(private_rows=copy.deepcopy(m['private_rows']), values={r['id']:r['baseline'] for r in m['private_rows']},
+                                   data_kind='private_experience', copy_sha256=m['copy_sha256'], persona=m['persona'])
+                elif m.get('fixture_set') == CATALOG_ID and m.get('catalog_revision') != 2:
+                    created.pop('catalog_revision', None);created['values']={r['id']:r['baseline'] for r in LEGACY_MATRIX_ROWS}
                 self.write(db, created); result['new_matter'] = created['id']
             else: raise Rejected('未知操作。')
             m['version'] += 1; m['seen'].append(request_id)
@@ -447,7 +465,7 @@ def handler(store):
             try:
                 if url.path == '/api/state': return self.send(200, store.state(query.get('matter',['demo-2026'])[0]))
                 if url.path == '/api/search': return self.send(200, store.search(query.get('matter',['demo-2026'])[0],query.get('q',[''])[0]))
-                files={'/':'index.html','/app.js':'app.js','/workbench.js':'workbench.js','/style.css':'style.css'}
+                files={'/':'index.html','/app.js':'app.js','/fx.js':'fx.js','/workbench.js':'workbench.js','/style.css':'style.css'}
                 if url.path not in files: return self.send(404,{'error':'Not found'})
                 ext = files[url.path].split('.')[-1]
                 mime={'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8'}[ext]
@@ -470,7 +488,7 @@ def handler(store):
 
 def main():
     parser=argparse.ArgumentParser(description='S1 synthetic-only local demonstration')
-    parser.add_argument('--db',default='.s1-demo/synthetic.sqlite3')
+    parser.add_argument('--db',default='.s1-demo/experience-v2.sqlite3')
     parser.add_argument('--port',type=int,default=8765)
     parser.add_argument('--backup'); parser.add_argument('--restore')
     args=parser.parse_args()
@@ -482,11 +500,25 @@ def main():
         Path(args.db).parent.mkdir(parents=True,exist_ok=True,mode=0o700)
         with sqlite3.connect(args.db) as dest: source.backup(dest)
         source.close()
-    store=Store(args.db,recover_pending=not bool(args.backup), matrix_demo=not bool(args.backup or args.restore))
+    experience=None
+    if Path(args.db).exists() and not (args.backup or args.restore):
+        try:
+            with sqlite3.connect(Path(args.db).resolve().as_uri()+'?mode=ro',uri=True) as previous:
+                expected_marker=PRIVATE_COPY_MARKER if experience is not None else MARKER
+                if previous.execute('SELECT marker FROM meta').fetchall()!=[(expected_marker,)]: raise ValueError()
+                target='experience-'+experience['copy_sha256'][:16] if experience is not None else DEMO_MATTER
+                record=previous.execute('SELECT payload FROM matters WHERE id=?',(target,)).fetchone()
+                stored=json.loads(record[0]) if record else None
+                if experience is not None:
+                    if not stored or stored.get('copy_sha256')!=experience['copy_sha256'] or stored.get('private_rows')!=experience['rows'] or stored.get('persona')!=experience['persona']: raise ValueError()
+                elif stored and stored.get('catalog_revision')!=2: raise ValueError()
+        except Exception: raise SystemExit('已有数据库不属于本次体验版本；请使用新路径，旧方案保持原样。') from None
+    store=Store(args.db,recover_pending=not bool(args.backup), matrix_demo=not bool(args.backup or args.restore),experience=experience)
     if args.backup: store.backup(args.backup); print('Synthetic backup saved.'); return
     if args.restore: print('Synthetic backup restored to new destination.'); return
     server=ThreadingHTTPServer(('127.0.0.1',args.port),handler(store))
-    print(f'SYNTHETIC ONLY / MOCK AI: http://127.0.0.1:{server.server_port}',flush=True)
+    target='experience-'+experience['copy_sha256'][:16] if experience is not None else DEMO_MATTER
+    print(f'PRICE EXPERIENCE COPY: http://127.0.0.1:{server.server_port}/?matter={target}',flush=True)
     server.serve_forever()
 
 

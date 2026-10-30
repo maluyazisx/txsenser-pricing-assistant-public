@@ -40,11 +40,11 @@ class BusinessBatch(unittest.TestCase):
         return dict(id=rid, old=self.state()['matter']['values'][rid], new=new, scope={k:row[k] for k in FIELDS})
 
     def test_new_catalog_keeps_legacy_and_one_database(self):
-        self.assertEqual(len(self.state()['rows']),24)
+        self.assertEqual(len(self.state()['rows']),42)
         self.assertEqual(len(self.store.state('demo-2026')['rows']),30)
         self.assertEqual(self.store.state('demo-2026')['matter']['version'],0)
         product=[r for r in MATRIX_ROWS if r['product_id']=='DEMO-LUMEN' and r['market']=='国内']
-        self.assertEqual({r['role'] for r in product},{'指导','直销','经销','OEM'})
+        self.assertEqual({r['role'] for r in product},{'指导','直销','经销','OEM','代理','出厂','大客户权限'})
         self.assertEqual(len({(r['configuration'],r['pn'],r['tier'],r['currency'],r['unit']) for r in product}),1)
         with self.store.connect() as db:
             self.assertEqual({r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")},{'meta','matters'})
