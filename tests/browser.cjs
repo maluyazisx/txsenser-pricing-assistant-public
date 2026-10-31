@@ -80,8 +80,18 @@ async function stopServer(server) {
     const layout=await page.evaluate(()=>{const table=document.querySelector('.role-table'),rows=[...table.tBodies[0].rows],heads=[...table.tHead.rows[0].cells];return {lastColumnRight:heads.at(-1).getBoundingClientRect().right,viewport:innerWidth,visibleProducts:rows.filter(row=>row.getBoundingClientRect().bottom<=innerHeight&&row.getBoundingClientRect().top>=0).length,maxRowHeight:Math.max(...rows.map(row=>row.getBoundingClientRect().height)),fontSize:parseFloat(getComputedStyle(table).fontSize),stickyProduct:getComputedStyle(rows[0].cells[0]).position,stickyHeader:getComputedStyle(heads[0]).position};});
     assert.ok(layout.lastColumnRight<=layout.viewport-8,'All price types fit at normal desktop width');assert.ok(layout.visibleProducts>=4,'Several products must fit in the first viewport');assert.ok(layout.maxRowHeight<=90);assert.ok(layout.fontSize>=13);assert.equal(layout.stickyProduct,'sticky');assert.equal(layout.stickyHeader,'sticky');
     assert.equal(await page.locator('#roleMatrix tbody tr').count(),6);
-    await perform('view',()=>page.locator('#roleMatrix input[type="checkbox"][data-row="MX-01-2"]').check());
-    await page.locator('#adjust').click();const price=page.locator('#roleMatrix input.price[data-row="MX-01-2"]');await price.fill('2000.00');
+    assert.equal(await page.locator('#fxManualUsd').count(),0);
+    assert.match(await page.locator('#fxUsd').innerText(),/^1 USD = \d+\.\d{2} CNY$/);
+    assert.match(await page.locator('#fxStatus').innerText(),/2026-10-30.*非实时/);
+    await page.locator('#fxAmountUSD').fill('105');assert.equal(await page.locator('#fxAmountCNY').inputValue(),'705');
+    await perform('view',()=>page.locator('#filter-role').selectOption('出厂'));
+    assert.equal(await page.locator('#roleMatrix thead th').count(),2);assert.equal(await page.locator('#roleMatrix thead th').last().innerText(),'出厂价');
+    assert.match(await page.locator('#summary').innerText(),/0 项参考价/);
+    await perform('view',()=>page.locator('#filter-role').selectOption(''));assert.equal(await page.locator('#roleMatrix thead th').count(),8);
+    await page.locator('#adjust').click();
+    await perform('view',()=>page.locator('#roleMatrix button.cell-price[data-row="MX-01-2"]').click());
+    assert.equal(await page.locator('#priceDetailsContent .source-card').count(),1);assert.equal(await page.locator('#showRoleDetails').count(),0);
+    const price=page.locator('#roleMatrix input.price[data-row="MX-01-2"]');await price.fill('2000.00');
     const preview=await perform('draft_preview',()=>page.locator('#previewSelected').click());
     assert.equal(preview.matter.values['MX-01-2'],'2050.00');assert.equal(preview.matter.quote_records.length,0);
     const adjusted=await perform('draft_confirm',()=>page.locator('#draftConfirm').click());
@@ -113,7 +123,7 @@ async function stopServer(server) {
     assert.equal(corrected.matter.values['MX-04-3'],'280.00');
     assert.deepEqual(errors, []);
     assert.deepEqual(externalRequests, []);
-    await page.locator('#showRoleMatrix').click();await page.evaluate(()=>scrollTo(0,0));
+    await page.locator('#showRoleMatrix').click();await page.locator('#closePriceDetails').click();await page.evaluate(()=>scrollTo(0,0));
     await page.screenshot({path: path.join(output, 'pricing-synthetic.png'),fullPage:false});
     console.log(JSON.stringify({status: 'SYNTHETIC_BROWSER_PASS',
       candidate: process.env.GITHUB_SHA || null, chromiumSandbox: true,

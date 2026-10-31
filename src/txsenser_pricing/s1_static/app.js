@@ -4,6 +4,7 @@ let writeBlockLevel=0, renderedPrices=[];
 function moneyParts(value){const raw=String(value??'');if(!/^-?\d{1,15}(?:\.\d{1,8})?$/.test(raw))return null;const negative=raw.startsWith('-'),[whole,fraction='']=raw.replace(/^-/, '').split('.');return {negative,n:BigInt(whole+fraction),d:10n**BigInt(fraction.length)};}
 function roundMoney(value){const p=moneyParts(value);if(!p||p.negative)throw Error('请输入非负金额。');return ((2n*p.n+p.d)/(2n*p.d)).toString();}
 function money(value){const p=moneyParts(value);if(!p)return '—';const n=(2n*p.n+p.d)/(2n*p.d);return (p.negative&&n?'-':'')+n.toString().replace(/\B(?=(\d{3})+(?!\d))/g,',');}
+function scopeUnitLabel(row){return (row.currency||'币种待确认')+' / '+(row.unit||'单位待确认');}
 function moneyDelta(after,before){const a=moneyParts(after),b=moneyParts(before);if(!a||!b)return '—';let n=a.n*b.d-b.n*a.d;const negative=n<0n;if(negative)n=-n;const d=a.d*b.d,value=(2n*n+d)/(2n*d);return (negative&&value?'-':value?'+':'')+value.toString().replace(/\B(?=(\d{3})+(?!\d))/g,',');}
 // Page-local input only. Never turn an unconfirmed field into an automatic write.
 const localPrices=new Map();
@@ -164,7 +165,7 @@ async function act(op,extra={}){
  }catch(e){blockWrites(unknownResult);return null;}finally{busy=false;}
 }
 function render(){
- const m=state.matter;document.title=m.title+' · 合成演示';
+ const m=state.matter;document.title=m.title+(state.marker==='TXSENSER_PRICING_PRIVATE_EXPERIENCE_V1'?' · 价格工作台':' · 合成演示');
  renderedPrices=[];
  $('matter').replaceChildren(...state.matters.map(x=>{const o=el('option',x.title);o.value=x.id;o.selected=x.id===m.id;return o;}));
  $('summary').textContent=`${state.rows.filter(visible).length} 项价格 · ${m.mode==='adjustment'?'调整价格':'价格总览'}`;
@@ -176,7 +177,7 @@ function render(){
  const tr=el('tr');tr.dataset.row=r.id;if(m.selected.includes(r.id))tr.className='selected';
  let td=el('td'),check=el('input');check.type='checkbox';check.checked=m.selected.includes(r.id);check.setAttribute('aria-label','选中 '+r.id);check.onchange=()=>act('view',{selected:check.checked?[...m.selected,r.id]:m.selected.filter(x=>x!==r.id),filters:m.filters});td.append(check);tr.append(td);
  td=el('td',r.family);td.append(el('small',r.configuration),el('small',r.id+' · '+(r.pn||'无PN · 配置身份明确')));tr.append(td);
- for(const text of [r.kind,r.market+' / '+r.application,r.role,r.tier||'未知',r.currency+' / '+r.unit])tr.append(el('td',text));
+ for(const text of [r.kind,(r.market||'市场待确认')+' / '+(r.application||'应用待确认'),r.role,r.tier==='source_not_specified'?'数量范围待确认':r.tier||'数量范围待确认',scopeUnitLabel(r)])tr.append(el('td',text));
  tr.append(el('td',money(r.baseline),'number'));
  td=el('td');if(m.values[r.id]!==r.baseline)td.className='changed';const input=el('input'),unsent=inputsFor(m.id).get(r.id);input.className='price';input.dataset.row=r.id;input.value=unsent?unsent.value:(m.values[r.id]===null?'':roundMoney(m.values[r.id]));input.inputMode='decimal';input.disabled=!m.selected.includes(r.id)||!!r.blocked||r.copy_editable===false;input.setAttribute('aria-label',r.id+' 调整后价格');
  const binding={input,matter:m.id,row:r,old:m.values[r.id],initialDisplay:input.value};renderedPrices.push(binding);input.oninput=()=>{rememberPrice(binding,true);if(m.fixture_set==='fictional-role-matrix-v1'&&typeof Workbench!=='undefined')Workbench.syncDraftConfirm();};
@@ -190,7 +191,7 @@ function render(){
  $('adjust').textContent=m.proposal?(m.fixture_set==='fictional-role-matrix-v1'?'预览建议修改范围':'采用建议并修改草稿'):'调整价格';
  $('context').textContent='已选 '+m.selected.length+' 项价格。分析和建议不会自动修改参考价。';
  $('conversation').replaceChildren(...m.conversation.map(x=>{const d=el('div',undefined,'message '+x.role);d.append(el('small',x.role+' · '+x.at),el('div',x.text));return d;}));$('conversation').scrollTop=$('conversation').scrollHeight;
- $('historyCount').textContent=`（${m.history.length} 条）`;$('history').replaceChildren(...[...m.history].reverse().map(h=>el('div',`修订 ${h.revision} · ${h.at} · ${h.actor}${h.undone?' · 已撤销':''}\n`+h.edits.map(e=>e.id+': '+money(e.old)+' → '+money(e.new)+' '+e.scope.currency+'/'+e.scope.unit).join('\n'),'history-entry')));
+ $('historyCount').textContent=`（${m.history.length} 条）`;$('history').replaceChildren(...[...m.history].reverse().map(h=>el('div',`修订 ${h.revision} · ${h.at} · ${h.actor}${h.undone?' · 已撤销':''}\n`+h.edits.map(e=>e.id+': '+money(e.old)+' → '+money(e.new)+' '+scopeUnitLabel(e.scope)).join('\n'),'history-entry')));
  const pending=Object.values(m.requests).filter(r=>r&&validPending(m,r.id));pendingToken=pending.length?pending[pending.length-1].id:null;
  $('finish').disabled=!pending.length;$('undo').disabled=m.fixture_set==='fictional-role-matrix-v1'||!m.history.some(h=>!h.undone&&h.actor!=='undo');
 }

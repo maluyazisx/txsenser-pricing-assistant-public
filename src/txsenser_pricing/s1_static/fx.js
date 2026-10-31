@@ -1,5 +1,5 @@
 'use strict';
-// Manual/reference conversion only. No network access and no price/history writes.
+// Verified dated public reference snapshot only. No network or price/history writes.
 (() => {
  const node=id=>document.getElementById(id),codes=['CNY','USD','EUR'];
  const amounts=Object.fromEntries(codes.map(code=>[code,node('fxAmount'+code)]));
@@ -13,18 +13,19 @@
  function clearOthers(){for(const code of codes)if(code!==last)amounts[code].value='';}
  function convert(){
   if(!rates){clearOthers();return;}
-  try{dateAge(date);}catch(_){rates=null;clearOthers();node('fxUsd').textContent='';node('fxEur').textContent='';status.textContent='参考日期已失效，请更新后换算';return;}
+  try{dateAge(date);}catch(_){rates=null;clearOthers();node('fxUsd').textContent='';node('fxEur').textContent='';status.textContent='参考日期已过期，暂不能换算';return;}
   let amount;try{amount=decimal(sourceAmount);if(amount.n>1000000000n*amount.d)throw Error();}catch(_){clearOthers();return;}
   for(const code of codes)if(code!==last){const from=rates[last],to=rates[code];amounts[code].value=round(amount.n*from.n*to.d,amount.d*from.d*to.n).toString();}
  }
  for(const code of codes){amounts[code].addEventListener('input',()=>{last=code;sourceAmount=amounts[code].value.trim();convert();});amounts[code].addEventListener('change',()=>{if(code!==last)return;try{const raw=decimal(sourceAmount);amounts[code].value=round(raw.n,raw.d).toString();}catch(_){}convert();});}
- node('fxApply').addEventListener('click',()=>{
-  try{const usd=decimal(node('fxManualUsd').value.trim()),eur=decimal(node('fxManualEur').value.trim()),asOf=node('fxManualDate').value,label=node('fxManualSource').value.trim();dateAge(asOf);if(usd.n<=0n||eur.n<=0n||!label||label.length>100)throw Error();
+ function applyReference(){
+  try{const ref=JSON.parse(node('fxReferenceData').textContent);if(ref.schema!=='verified-reference-v1'||ref.unit!=='CNY_PER_100_FOREIGN'||ref.source_url!=='https://www.safe.gov.cn/safe/rmbhlzjj/'||ref.data_url!=='https://www.safe.gov.cn/AppStructured/hlw/RMBQuery.do')throw Error();
+   const usd=decimal(ref.per100.USD),eur=decimal(ref.per100.EUR),asOf=ref.as_of,label=ref.source_label;dateAge(asOf);if(usd.n<=0n||eur.n<=0n||typeof label!=='string'||!label||label.length>100)throw Error();usd.d*=100n;eur.d*=100n;
    rates={CNY:{n:1n,d:1n},USD:usd,EUR:eur};date=asOf;source=label;
-   node('fxUsd').textContent='1美元 ≈ '+fixed2(usd)+'人民币';node('fxEur').textContent='1欧元 ≈ '+fixed2(eur)+'人民币';status.textContent='人工参考 · '+source+' · 数据日期 '+date;
-   node('fxManual').open=false;convert();
-  }catch(_){rates=null;clearOthers();node('fxUsd').textContent='';node('fxEur').textContent='';status.textContent='请填写有效参考率、数据日期和来源；尚不可换算';}
- });
- clearOthers();
+   node('fxUsd').textContent='1 USD = '+fixed2(usd)+' CNY';node('fxEur').textContent='1 EUR = '+fixed2(eur)+' CNY';status.textContent=date+' · '+source+' · 日度中间价，非实时';
+   convert();
+  }catch(_){rates=null;clearOthers();node('fxUsd').textContent='';node('fxEur').textContent='';status.textContent='暂无经核验的近期参考汇率，暂不能换算。';}
+ }
+ applyReference();
 })();
 

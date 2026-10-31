@@ -15,10 +15,10 @@ test('integer display and explicit rounding preview never alter untouched source
  const data=seven();data.rows.find(r=>r.id==='MX-01-2').baseline='2050.50';data.matter.values['MX-01-2']='2050.50';
  const h=await harness(data);const before=h.posts().length;assert.ok(h.all().some(n=>n.className==='cell-price'&&n.textContent==='2,051'));assert.equal(h.posts().length,before);assert.equal(h.snapshot().matter.values['MX-01-2'],'2050.50');
  const check=h.findCheck('MX-01-2');check.checked=true;await check.onchange();await h.click('adjust');let price=h.findPrice('MX-01-2');assert.equal(price.value,'2051');assert.equal(h.run('hasUnsubmittedPrices()'),false,'Rounding the display is not an edit');
- price.value='2000.50';price.oninput();await h.click('showRoleDetails');await h.click('showRoleMatrix');assert.equal(h.findPrice('MX-01-2').value,'2000.50');await h.click('previewSelected');
+ price.value='2000.50';price.oninput();await h.all().find(n=>n.className==='price-detail-action'&&n.dataset.row==='MX-01-2').onclick();await h.click('showRoleMatrix');assert.equal(h.findPrice('MX-01-2').value,'2000.50');await h.click('previewSelected');
  const request=h.posts().at(-1).request;assert.equal(request.op,'draft_preview');assert.equal(request.edits[0].new,'2001');assert.equal(request.edits[0].old,'2050.50');assert.equal(h.snapshot().matter.values['MX-01-2'],'2050.50');
  await h.click('draftConfirm');assert.equal(h.snapshot().matter.values['MX-01-2'],'2001.00');assert.equal(h.snapshot().rows.find(r=>r.id==='MX-01-2').baseline,'2050.50');assert.equal(h.snapshot().matter.values['MX-01-1'],'2200.00');assert.equal(h.run('hasUnsubmittedPrices()'),false);
-  await h.click('showRoleDetails');assert.equal(h.findPrice('MX-01-2').value,'2001');assert.equal(h.run('hasUnsubmittedPrices()'),false);await h.click('showRoleMatrix');assert.equal(h.node('businessWorkbench').hidden,true);
+  assert.ok(!h.node('showRoleDetails'));assert.equal(h.run('hasUnsubmittedPrices()'),false);await h.click('showRoleMatrix');assert.equal(h.node('businessWorkbench').hidden,true);
 });
 test('inquiry missing fields are identified and invalid price input does not POST',async()=>{
  const h=await harness(seven());await h.click('openInquiry');await h.click('wbAnalyze');assert.equal(h.node('wbCustomer').className,'field-missing');assert.equal(h.node('wbQuantity').className,'field-missing');

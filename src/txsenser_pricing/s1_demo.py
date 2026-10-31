@@ -86,12 +86,28 @@ def identity(row):
 def blocked(row, rows=None):
     rows = ROWS if rows is None else rows
     if row['source_status'] != 'synthetic_available':
+        if row.get('provenance_kind') == 'private_source_copy':
+            return (row.get('risk') or '适用条件待确认') + '；暂不能调整价格。'
         return row['risk'] + '；请补齐该范围的合成来源/档位后再编辑。'
     if any(row[k] is None for k in FIELDS if k != 'pn'):
         return '范围不完整；请明确缺失字段。'
     if sum(identity(r) == identity(row) for r in rows) != 1:
         return '身份重复；请明确唯一配置/PN及范围。'
     return None
+
+
+def private_draft_blocked(row, rows, matter):
+    reason = blocked(row, rows)
+    if matter.get('data_kind') != 'private_experience': return reason
+    if row.get('copy_editable') is not True or matter.get('persona') != 'ceo':
+        return '当前权限仅可查看此价格，不能调整体验草稿。'
+    if reason is None: return None
+    if row.get('provenance_kind') != 'private_source_copy' or row.get('baseline') is None:
+        return reason
+    if not all(row.get(key) for key in ('id', 'product_id', 'family', 'kind', 'configuration')):
+        return reason
+    if sum(identity(other) == identity(row) for other in rows) != 1: return reason
+    return None  # Only the explicitly confirmed, isolated CEO draft path may use this.
 
 
 def validate_filters(filters):
@@ -149,6 +165,8 @@ class OfflineProvider:
 class Store:
     def __init__(self, path, provider=None, recover_pending=True, matrix_demo=False, experience=None):
         self.marker = PRIVATE_COPY_MARKER if experience is not None else MARKER
+        if experience is not None and experience.get('persona') not in ('ceo','sales_director','sales_admin','sales'):
+            raise Rejected('查看身份未识别；未打开或修改体验库。')
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self.path.exists():
@@ -156,7 +174,13 @@ class Store:
                 with sqlite3.connect(f'file:{self.path.resolve()}?mode=ro',uri=True) as existing:
                     if existing.execute('SELECT marker FROM meta').fetchall() != [(self.marker,)]:
                         raise Rejected('非S1合成存储，拒绝打开。')
-            except sqlite3.Error as e:
+                    if experience is not None:
+                        copy_id = 'experience-' + experience['copy_sha256'][:16]
+                        payload = existing.execute('SELECT payload FROM matters WHERE id=?', (copy_id,)).fetchone()
+                        previous = json.loads(payload[0]) if payload else None
+                        if not isinstance(previous, dict) or previous.get('data_kind') != 'private_experience' or previous.get('copy_sha256') != experience['copy_sha256'] or previous.get('persona') != experience['persona'] or previous.get('private_rows') != experience['rows']:
+                            raise Rejected('本次副本或查看身份与已有体验库不匹配；原库已保留，请使用对应独立库。')
+            except (sqlite3.Error, json.JSONDecodeError) as e:
                 raise Rejected('无法验证S1合成存储标记；拒绝修改。') from e
         self.provider = provider or OfflineProvider()
         with self.connect() as db:
@@ -221,7 +245,8 @@ class Store:
             history = self.workbench_history(db) if m.get('fixture_set') == CATALOG_ID else []
         rows = catalog(m)
         result = dict(marker=self.marker, matter=m, matters=summaries,
-            rows=[dict(r, blocked=blocked(r, rows)) for r in rows], visible_ids=[r['id'] for r in rows if visible(r,m['filters'])], provider='offline-deterministic-mock')
+            rows=[dict(r, blocked=private_draft_blocked(r, rows, m), quote_blocked=blocked(r, rows),
+                experience_draft_only=m.get('data_kind')=='private_experience' and blocked(r, rows) is not None and private_draft_blocked(r, rows, m) is None) for r in rows], visible_ids=[r['id'] for r in rows if visible(r,m['filters'])], provider='offline-deterministic-mock')
         if m.get('fixture_set') == CATALOG_ID:
             products = {r['product_id']: dict(id=r['product_id'], label=r['family']+' / '+r['configuration']) for r in rows}
             result.update(workbench_history=history, workbench=dict(customers=CUSTOMERS, projects=PROJECTS,
@@ -234,7 +259,7 @@ class Store:
         selected = [dict(by_id[rid], draft=m['values'][rid]) for rid in m['selected'] if visible(by_id[rid], m['filters'])]
         return dict(matter=m['id'], revision=m['revision'], selected=selected, filters=m['filters'], recent=m['conversation'][-8:])
 
-    def checked_edits(self, m, edits):
+    def checked_edits(self, m, edits, private_draft=False):
         rows = catalog(m); by_id = {r['id']: r for r in rows}
         if not isinstance(edits, list) or not 1 <= len(edits) <= len(rows): raise Rejected(f'需要1–{len(rows)}条精确行编辑。')
         checked = []; ids = set()
@@ -243,7 +268,7 @@ class Store:
             if not row or rid in ids: raise Rejected('行不存在或批次含重复行；整批未保存。')
             ids.add(rid)
             if rid not in m['selected'] or not visible(row, m['filters']): raise Rejected(f'{rid} 不在当前已选且可见范围；整批未保存。')
-            reason = blocked(row, rows)
+            reason = private_draft_blocked(row, rows, m) if private_draft else blocked(row, rows)
             if row.get('copy_editable') is False: raise Rejected('此权限只能查看价格，不能调整标准价格。')
             if reason: raise Rejected(f'{rid}：{reason} 整批未保存。')
             if edit.get('scope') != {k: row[k] for k in FIELDS}: raise Rejected(f'{rid} 范围不匹配；整批未保存。')
@@ -255,14 +280,14 @@ class Store:
             checked.append(dict(id=rid, old=m['values'][rid], new=new_value, scope=edit['scope']))
         return checked
 
-    def edits(self, m, edits, actor):
-        checked = self.checked_edits(m, edits)
+    def edits(self, m, edits, actor, private_draft=False):
+        checked = self.checked_edits(m, edits, private_draft=private_draft)
         for e in checked: m['values'][e['id']] = e['new']
         m['revision'] += 1
         m['history'].append(dict(revision=m['revision'], at=now(), actor=actor, edits=checked, undone=False))
 
     def preview_draft(self, m, edits):
-        checked = self.checked_edits(m, edits)
+        checked = self.checked_edits(m, edits, private_draft=True)
         m['draft_preview'] = dict(token=uuid.uuid4().hex, prepared_version=m['version'] + 1,
             revision=m['revision'], selected=m['selected'][:], filters=copy.deepcopy(m['filters']),
             generation=m['generation'], edits=checked)
@@ -384,7 +409,7 @@ class Store:
                             raise Rejected('草稿预览已失效；请重新预览范围与新旧值。')
                         if any(preview[key] != m[key] for key in ('revision', 'selected', 'filters', 'generation')):
                             raise Rejected('预览范围或草稿已变化；请重新确认。')
-                        self.edits(m, preview['edits'], 'manual_preview_confirmed')
+                        self.edits(m, preview['edits'], 'manual_preview_confirmed', private_draft=True)
                         result['confirmed_token'] = preview['token']
                         m['draft_preview'] = None
                     elif op == 'inquiry':
