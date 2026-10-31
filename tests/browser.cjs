@@ -123,7 +123,14 @@ async function stopServer(server) {
     assert.equal(corrected.matter.values['MX-04-3'],'280.00');
     assert.deepEqual(errors, []);
     assert.deepEqual(externalRequests, []);
-    await page.locator('#showRoleMatrix').click();await page.locator('#closePriceDetails').click();await page.evaluate(()=>scrollTo(0,0));
+    await page.locator('#showRoleMatrix').click();
+    // Reload intentionally resets the source card; open an actual price before closing it.
+    await page.locator('#roleMatrix button.cell-price[data-row="MX-01-1"]').click();
+    assert.equal(await page.locator('#priceDetails').isVisible(),true);
+    assert.equal(await page.locator('#priceDetailsContent .source-card').count(),1);
+    await page.locator('#closePriceDetails').click();
+    assert.equal(await page.locator('#priceDetails').isVisible(),false);
+    await page.evaluate(()=>scrollTo(0,0));
     await page.screenshot({path: path.join(output, 'pricing-synthetic.png'),fullPage:false});
     console.log(JSON.stringify({status: 'SYNTHETIC_BROWSER_PASS',
       candidate: process.env.GITHUB_SHA || null, chromiumSandbox: true,
