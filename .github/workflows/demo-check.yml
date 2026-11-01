@@ -2,9 +2,9 @@ name: Pricing demo check
 on:
   push:
     branches: [main]
-    paths: ["src/**", "tests/**", "pyproject.toml", ".github/workflows/demo-check.yml"]
+    paths: ["src/**", "tests/**", "pyproject.toml", "checks/layout-amount/**", ".github/workflows/demo-check.yml"]
   pull_request:
-    paths: ["src/**", "tests/**", "pyproject.toml", ".github/workflows/demo-check.yml"]
+    paths: ["src/**", "tests/**", "pyproject.toml", "checks/layout-amount/**", ".github/workflows/demo-check.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -15,6 +15,9 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: checks/layout-amount
     env:
       PYTHONPATH: src
       PYTHONDONTWRITEBYTECODE: "1"
@@ -26,14 +29,15 @@ jobs:
       - name: Check available runtimes and source syntax
         run: |
           python3 --version
+          python3 -c "import hashlib,json,pathlib; m=json.loads(pathlib.Path('deploy/public-check.manifest.json').read_text()); assert all(len(pathlib.Path(x['path']).read_bytes())==x['bytes'] and hashlib.sha256(pathlib.Path(x['path']).read_bytes()).hexdigest()==x['sha256'] for x in m['files'])"
           node --version
           python3 -m py_compile src/txsenser_pricing/s1_demo.py src/txsenser_pricing/s1_workbench.py
           node --check src/txsenser_pricing/s1_static/app.js
           node --check src/txsenser_pricing/s1_static/workbench.js
-      - name: Check this business batch with actual synthetic Store
-        run: python3 -m unittest discover -s tests -p 'test_s1_workbench_batch.py' -v
-      - name: Check this page flow with a response double
-        run: node tests/test_s1_compact.cjs && node tests/test_s1_interaction31.cjs && node tests/test_s1_fx_manual.cjs
+      - name: Check exact amount display and affected column rules
+        run: |
+          node tests/test_s1_price_display.cjs
+          node tests/test_s1_price_table.cjs --display-only
       - name: Prepare only the browser driver
         run: npm install --prefix "$RUNNER_TEMP/preview-driver" --no-save --ignore-scripts playwright@1.55.1
       - name: Add Chinese fonts to the disposable cloud runner
@@ -41,16 +45,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends fonts-noto-cjk
           fc-match 'sans-serif:lang=zh-cn' | grep -q 'NotoSansCJK'
-      - name: Check one real browser three-scenario fictional business flow
+      - name: Check six layouts and exact amount restore in one synthetic browser
         env:
           NODE_PATH: ${{ runner.temp }}/preview-driver/node_modules
           CHROME_PATH: /usr/bin/google-chrome
-        run: node tests/browser.cjs
-      - name: Retain one synthetic browser screenshot
+        run: node tests/browser_price_export.cjs --layout-and-amount
+      - name: Retain only affected synthetic browser evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pricing-synthetic-browser-${{ github.sha }}
-          path: test-results/pricing-synthetic.png
+          path: |
+            checks/layout-amount/test-results/price-table/layout-*.png
+            checks/layout-amount/test-results/price-table/amount-*.png
           if-no-files-found: error
           retention-days: 7
 

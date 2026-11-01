@@ -1,0 +1,70 @@
+{
+  "kind": "SYNTHETIC_SCOPED_CHECK_FILES_NOT_A_FULL_PUBLIC_RELEASE",
+  "files": [
+    {
+      "path": "src/txsenser_pricing/s1_demo.py",
+      "bytes": 37377,
+      "sha256": "2cac244834d86231054e6e5f8972fd6b3fef9ca7e9378987c58a03b8b2edad69"
+    },
+    {
+      "path": "src/txsenser_pricing/s1_workbench.py",
+      "bytes": 11777,
+      "sha256": "117195d00d802d646e666fe270b701397001d1d76a5d71492ce54671154d8fb7"
+    },
+    {
+      "path": "src/txsenser_pricing/s1_static/app.js",
+      "bytes": 22790,
+      "sha256": "57331c1acb32e8b2e27678788252a73c5eb1c61b61dfe51897801daed689eb34"
+    },
+    {
+      "path": "src/txsenser_pricing/s1_static/workbench.js",
+      "bytes": 35084,
+      "sha256": "072f373dfa18380a7d29d14662db456456d8700ad5667fa7ad502df79980b973"
+    },
+    {
+      "path": "src/txsenser_pricing/s1_static/index.html",
+      "bytes": 8911,
+      "sha256": "911313b1e7fa952ec3227f1762b5c1e5ba83f84c6f1097cd07c23e315cbad8f0"
+    },
+    {
+      "path": "src/txsenser_pricing/s1_static/fx.js",
+      "bytes": 3146,
+      "sha256": "c8cc629b2dae94504ba890a2993fbd2382c02b8dfa53f3cfacb6b311cab4533e"
+    },
+    {
+      "path": "src/txsenser_pricing/s1_static/style.css",
+      "bytes": 15524,
+      "sha256": "9edc0cb162ed69145ff1f73cdddecca08e2430dd53c7d1135cf9586182e3a418"
+    },
+    {
+      "path": "tests/test_s1_workbench_flow.cjs",
+      "bytes": 17101,
+      "sha256": "56efbe477ddf3dd2d1e958ee8425943fd4eac8413f0fc64c59aedc5a04000f3e"
+    },
+    {
+      "path": "pyproject.toml",
+      "bytes": 452,
+      "sha256": "c2bb04da2e4bd5d55436b703bade5bb5916a3587746f05d82832cb31629a321c"
+    },
+    {
+      "path": "src/txsenser_pricing/__init__.py",
+      "bytes": 72,
+      "sha256": "21414e791007d1eb87cc5637ffe4264abe8d37850804df5e13f30bbdc64b49f7"
+    },
+    {
+      "path": "tests/browser_price_export.cjs",
+      "bytes": 13417,
+      "sha256": "500917809873abc075382f1e24e08a37cc923f9e43eea059cbde35ba56181b3e"
+    },
+    {
+      "path": "tests/test_s1_price_display.cjs",
+      "bytes": 3081,
+      "sha256": "18299c9df6ec65b705456fe1506aeecb8147bf79ccaffb0d924e8a7b54c2c419"
+    },
+    {
+      "path": "tests/test_s1_price_table.cjs",
+      "bytes": 10426,
+      "sha256": "f6b7a1f9c5e7024c50b129ccee9c7eb5f01ff88aab461879125d2e92cf4068e3"
+    }
+  ]
+}
