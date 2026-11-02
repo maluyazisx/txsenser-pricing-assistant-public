@@ -195,8 +195,16 @@ const Workbench = (() => {
  function terms(){return Object.fromEntries([['customer_id','wbCustomer'],['project_id','wbProject'],['product_id','wbProduct'],['market','wbMarket'],['application','wbApplication'],['role','wbRole'],['quantity','wbQuantity'],['currency','wbCurrency'],['unit','wbUnit'],['conditions','wbConditions']].map(([key,id])=>[key,node(id).value]));}
  function quoteInput(){return {terms:terms(),amount:node('wbAmount').value,...(correction?{quote_id:correction.id,expected_version:correction.version,reason:node('wbReason').value}:{})};}
  function describeTerms(t){const options=state.workbench;const product=options.products.find(p=>p.id===t.product_id);return [options.customers[t.customer_id],options.projects[t.project_id],product?product.label:t.product_id,t.market,t.application,t.role,'数量 '+t.quantity,t.currency+'/'+t.unit,t.conditions].join(' · ');}
+ function renderDiscussion(data){
+  const m=data.matter,by=new Map(data.rows.map(r=>[r.id,r]));
+  node('chooseDiscussionPrices').textContent=m.selected.length?'更换比较价格':'选择比较价格';node('clearDiscussionPrices').disabled=!m.selected.length;
+  node('discussionSelected').replaceChildren(...m.selected.map(id=>{const row=by.get(id),item=elem('div',undefined,'discussion-price');item.append(elem('span',priceLabel(row)+(data.visible_ids.includes(id)?'':' · 当前筛选外')));const remove=elem('button','移除');remove.dataset.removeSelection=id;remove.onclick=()=>act('view',{selected:m.selected.filter(x=>x!==id),filters:m.filters});item.append(remove);return item;}));
+  if(!m.selected.length)node('discussionSelected').append(elem('p','尚未选择具体价格。'));
+  node('discussionChoices').replaceChildren(...data.rows.filter(r=>data.visible_ids.includes(r.id)&&r.baseline!==null).map(row=>{const label=elem('label',undefined,'discussion-price'),check=elem('input');check.type='checkbox';check.dataset.discussionRow=row.id;check.checked=m.selected.includes(row.id);check.onchange=async()=>{const result=await act('view',{selected:check.checked?[...new Set([...m.selected,row.id])]:m.selected.filter(id=>id!==row.id),filters:m.filters});if(!result)check.checked=state.matter.selected.includes(row.id);return result;};label.append(check,elem('span',priceLabel(row)+' · '+money(m.values[row.id])));return label;}));
+ }
+ function hasUnsubmittedInquiry(){return privateInquiry()?inquiryDirty:formDirty;}
  function renderReadHistory(host,history){
-  const labels={not_connected:'共享报价历史尚未接通；当前可核对来源参考与询价条件。',identity_unresolved:'客户、项目或产品配置关联尚未确认；未查询该范围历史。',unavailable:'共享历史暂时不可用，本次未完成核对。',ready_empty:'本次查询时点和范围内未返回可参考历史。',ready_records:'已取得历史参考；条件不同不自动沿用金额。'};
+  const labels={not_connected:'报价历史尚未接通。',identity_unresolved:'尚未确认客户、项目或产品的对应关系，暂时无法查找报价。',unavailable:'报价记录暂时无法读取，请稍后重试。',ready_empty:'没有找到符合本次条件的历史记录。',ready_records:'已找到相关历史记录，请核对产品、数量及交易条件后参考。'};
   const h=history||{status:'not_connected'};host.append(elem('p',labels[h.status]||labels.unavailable));
   if(h.status==='ready_records'||h.status==='ready_empty'){
    host.append(elem('p','查询时间：'+(h.as_of||'待核对')+'；知识截至：'+(h.knowledge_as_of||'待核对')));
@@ -204,24 +212,25 @@ const Workbench = (() => {
   }
  }
  function renderPrivateInquiry(data){
-  node('wbAnalyze').textContent='核对并保存询价条件';node('wbQuotePrepare').disabled=true;node('wbQuoteConfirm').disabled=true;
+  node('wbAnalyze').textContent='核对价格并保存';node('wbQuotePrepare').disabled=true;node('wbQuoteConfirm').disabled=true;
   const analysis=data.inquiry_read;node('wbAnalysis').replaceChildren();node('wbHistory').replaceChildren();
   if(inquiryDirty){for(const host of ['wbAnalysis','wbHistory'])node(host).append(elem('p','询价条件已变化，请重新核对并保存；旧结果不代表当前输入。'));return;}
   if(analysis){
-   node('wbAnalysis').append(elem('strong',analysis.status==='REFERENCE_ONLY'?'来源参考核对':analysis.status==='NEEDS_INFO'?'待补条件':'未找到唯一来源参考'),elem('p',analysis.reason));
+   node('wbAnalysis').append(elem('strong',analysis.status==='REFERENCE_ONLY'?'价格核对结果':analysis.status==='NEEDS_INFO'?'请补充条件':'暂未找到匹配价格'));
    if(analysis.missing.length)node('wbAnalysis').append(elem('p','请补充：'+analysis.missing.join('、')));
-   for(const ref of analysis.references)node('wbAnalysis').append(elem('p','来源参考 '+money(ref.baseline)+' '+ref.currency+'/'+ref.unit+' · '+typeLabel(ref.role)+' · '+(ref.conditions||'商务条件待核对')),elem('p','来源：'+(ref.source||'来源待核对')+'；当前性：'+(ref.effective||'未提供现行依据')+'；批准线索：'+(ref.approval||'未提供批准线索')));
-   for(const difference of analysis.differences)node('wbAnalysis').append(elem('p',difference));
+   for(const ref of analysis.references){node('wbAnalysis').append(elem('p','参考单价：'+money(ref.baseline)+' '+ref.currency+'/'+ref.unit+' · '+typeLabel(ref.role),'inquiry-price'),elem('p','适用条件：'+(ref.conditions||'待确认')));const trace=elem('details');trace.append(elem('summary','查看价格依据'),elem('p','参考已导入的价格资料，不采用本方案的试调金额。'),elem('p','体验范围确认不代表正式价格审批。'));for(const [label,value]of [['资料标识',ref.source],['资料位置',ref.source_anchor],['适用依据记录',ref.effective],['体验确认记录',ref.approval]])if(value)trace.append(elem('p',label+'：'+value));node('wbAnalysis').append(trace);}
+   for(const difference of analysis.differences)node('wbAnalysis').append(elem('p',difference.includes('未设固定数量分档')?'批量采购请与公司另议；不会自动套用数量折扣。':difference));
+   node('wbAnalysis').append(elem('p','本次询价已保存，仅供价格核对，不是正式报价。'));
    renderReadHistory(node('wbAnalysis'),analysis.history);
-  }else node('wbAnalysis').append(elem('p','选择产品与参考条件后核对；这里只保存询价条件，不生成已报价记录。'));
+  }else node('wbAnalysis').append(elem('p','选择产品和销售方式后，核对本次询价。'));
   renderReadHistory(node('wbHistory'),data.history_connection);
  }
  function render(data){
   const enabled=data.matter.fixture_set===CATALOG;node('openPrices').hidden=pane==='prices';node('businessWorkbench').hidden=!enabled||pane==='prices';node('roleViewControls').hidden=!enabled;node('inquirySection').hidden=pane==='history';node('quoteSection').hidden=pane!=='quote';node('historySection').hidden=pane!=='history';
   if(!enabled)return;initialize(data);
-  const isPrivate=data.matter.data_kind==='private_experience';node('openQuote').hidden=isPrivate;node('quoteSection').hidden=isPrivate||pane!=='quote';node('wbCustomerField').hidden=isPrivate;node('wbProjectField').hidden=isPrivate;node('wbPrivateHint').hidden=!isPrivate;
-  node('wbPrivateHint').textContent='来源参考询价：保存条件供下次继续核对；不代表正式报价或已向客户报出。客户与项目将在共享历史接通并确认身份后关联。';node('wbQuantityLabel').textContent=isPrivate?'本次询价数量（可留空）':'数量';node('wbHistoryTitle').textContent=isPrivate?'共享报价历史（只读）':'报价历史';
-  node('discussionHint').textContent='按当前选择提供规则辅助分析；调整建议须预览、确认。';
+  const isPrivate=data.matter.data_kind==='private_experience';node('openQuote').hidden=isPrivate;node('quoteSection').hidden=isPrivate||pane!=='quote';node('wbCustomerField').hidden=isPrivate;node('wbProjectField').hidden=isPrivate;node('wbPrivateHint').hidden=!isPrivate||pane==='history';
+  node('wbPrivateHint').textContent='选择产品和销售方式，核对价格并保存本次询价。';node('wbQuantityLabel').textContent=isPrivate?'本次询价数量（可留空）':'数量';node('wbHistoryTitle').textContent='报价历史';node('openHistory').textContent=isPrivate&&data.history_connection&&data.history_connection.status==='not_connected'?'报价历史 · 未接通':'报价历史';
+  node('discussionHint').textContent='规则辅助：按所选价格逐项比较；不具备自由问答能力，也不会自动改价。';
   const m=data.matter,preview=m.draft_preview;if(!editing||!preview){node('draftPreviewPanel').hidden=true;if(activePanel==='draftPreviewPanel')closePanel();}
   syncDraftConfirm();
   if(preview){node('draftPreviewRows').replaceChildren(...preview.edits.map(edit=>{const row=data.rows.find(r=>r.id===edit.id);return elem('p',[row.family,row.configuration,edit.scope.market||'市场待确认',typeLabel(edit.scope.role),quantityText(row),money(edit.old)+' → '+money(edit.new)+'（变化 '+moneyDelta(edit.new,edit.old)+'）',scopeUnitLabel(edit.scope)].join(' · '));}));}
@@ -248,6 +257,7 @@ const Workbench = (() => {
   if(!history.length)node('wbHistory').append(elem('p','暂无已确认报价。'));
  }
  function setup(){
+  node('chooseDiscussionPrices').onclick=()=>{node('discussionChooser').hidden=false;renderDiscussion(state);};node('finishDiscussionSelection').onclick=()=>{node('discussionChooser').hidden=true;};node('clearDiscussionPrices').onclick=()=>act('view',{selected:[],filters:state.matter.filters});
   node('closePriceDetails').onclick=()=>{detailRowId=null;closePanel();};node('draftBack').onclick=()=>closePanel();if(typeof document.addEventListener==='function')document.addEventListener('keydown',panelKey);node('openInquiry').onclick=()=>showPane('inquiry');node('openQuote').onclick=()=>showPane('quote');node('openHistory').onclick=()=>showPane('history');node('discuss').onclick=()=>{const open=node('discussionPanel').hidden;node('discussionPanel').hidden=!open;node('workspace').className=open?'with-discussion':'';node('discuss').setAttribute('aria-expanded',String(open));};node('adjust').onclick=()=>{if(busy||loading||writeBlockReason){status(writeBlockReason||'上一操作尚未确认。',true);return null;}if(!current())return act('mode',{mode:'adjustment'});if(state.matter.proposal)return act('mode',{mode:'adjustment'});editing=true;batchMode=false;pane='prices';const rows=state.rows.filter(r=>state.visible_ids.includes(r.id)),eligible=rows.filter(selectable);node('editHint').textContent=eligible.length?'点击带边框的价格单元格选择并输入；预览后确认。':'当前范围暂无可调整价格。';renderAll();status(eligible.length?'已进入调整：点击具体价格单元格选择。':rows.length?selectionReason(rows[0]):'当前筛选范围暂无价格。',!eligible.length);};node('previewSelected').onclick=()=>previewSelected();
   node('openPrices').onclick=()=>showPane('prices');
   node('allPriceColumns').onclick=()=>setPriceColumns(state.workbench.roles.slice());node('clearPriceColumns').onclick=()=>setPriceColumns([]);
@@ -262,7 +272,7 @@ const Workbench = (() => {
   node('wbAnalyze').onclick=async()=>{
    const input=terms(),generation=inquiryGeneration,matter=state.matter.id,isPrivate=privateInquiry();
    const result=await act('inquiry',{terms:input});
-   if(isPrivate&&result){inquiryDirty=generation!==inquiryGeneration||JSON.stringify(input)!==JSON.stringify(terms())||matter!==state.matter.id;renderAll();status(inquiryDirty?'已保存提交时的询价条件；新输入保留，请重新核对并保存。':'询价条件已保存；来源参考不代表正式报价。',inquiryDirty);}
+   if(isPrivate&&result){inquiryDirty=generation!==inquiryGeneration||JSON.stringify(input)!==JSON.stringify(terms())||matter!==state.matter.id;renderAll();status(inquiryDirty?'已保存提交时的询价条件；新输入保留，请重新核对并保存。':'本次询价已保存，可继续核对或下次打开。',inquiryDirty);}
    else if(result&&result.analysis&&result.analysis.references.length&&!correction)node('wbAmount').value=roundMoney(result.analysis.references[0].amount);
   };
   node('wbQuotePrepare').onclick=async()=>{
@@ -276,7 +286,7 @@ const Workbench = (() => {
   node('wbQuoteConfirm').onclick=async()=>{if(privateInquiry()||formDirty||!state.matter.quote_preview||state.matter.quote_preview.prepared_version!==state.matter.version)return;const result=await act('quote_confirm',{token:state.matter.quote_preview.token,acknowledged:node('wbAcknowledged').checked});if(result){correction=null;node('wbCorrection').textContent='';node('wbAcknowledged').checked=false;}};
  }
  const renderAll=()=>{if(typeof state!=='undefined'&&state)globalThis.render();};
- return {catalog:CATALOG,groupRows,renderMatrix,render,syncDraftConfirm,previewSelected,sent,finished,resolve,accepted,duplicate,setup,scopeIntent,notice:()=>{const text=resolutionNotice;resolutionNotice='';return text;}};
+ return {catalog:CATALOG,renderDiscussion,hasUnsubmittedInquiry,groupRows,renderMatrix,render,syncDraftConfirm,previewSelected,sent,finished,resolve,accepted,duplicate,setup,scopeIntent,notice:()=>{const text=resolutionNotice;resolutionNotice='';return text;}};
 })();
 Workbench.setup();
 if(typeof state!=='undefined'&&state)render();

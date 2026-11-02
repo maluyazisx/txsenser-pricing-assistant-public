@@ -1,6 +1,6 @@
 'use strict';
 let state, busy=false, pendingToken=null, failNext=false, loading=false, writeBlockReason='';
-let writeBlockLevel=0, renderedPrices=[];
+let writeBlockLevel=0, renderedPrices=[],messageEditGeneration=0;
 function moneyParts(value){const raw=String(value??'');if(!/^-?\d{1,15}(?:\.\d{1,8})?$/.test(raw))return null;const negative=raw.startsWith('-'),[whole,fraction='']=raw.replace(/^-/, '').split('.');return {negative,n:BigInt(whole+fraction),d:10n**BigInt(fraction.length)};}
 function roundMoney(value){const p=moneyParts(value);if(!p||p.negative)throw Error('请输入非负金额。');return ((2n*p.n+p.d)/(2n*p.d)).toString();}
 function money(value){const p=moneyParts(value);if(!p)return '—';const n=(2n*p.n+p.d)/(2n*p.d);return (p.negative&&n?'-':'')+n.toString().replace(/\B(?=(\d{3})+(?!\d))/g,',');}
@@ -106,7 +106,7 @@ function feedback(op,extra,before,data){
   if(request&&request.status==='stale')return '迟到回应已阻断；没有覆盖新编辑。记录已保存。';
   const pending=before.requests[extra.token],explicit=pending&&Array.isArray(pending.edits)&&pending.edits.length;
   if(explicit)return changed?'演示指令已修改草稿并确认保存（未批准）。':'演示指令已记录，草稿金额未变化。';
-  return m.proposal?'模拟回复已记录，建议尚未采用。':'模拟回复已记录。';
+  return m.proposal?'规则建议已记录，尚未采用。':'规则辅助回复已记录。';
  }
  if(op==='new_round')return '新报价方案已创建，旧方案仍可查看。';
  return '操作已记录并确认保存。';
@@ -121,8 +121,11 @@ async function load(){
   if(!r.ok||!validState(data)||data.matter.id!==mid())throw Error('报价方案读取未完成，请重新载入核对。');
   if(state&&state.matter.id===data.matter.id&&data.matter.version<state.matter.version)throw Error('读取的报价方案版本过旧，请重新载入核对。');
   capturePrices();
+  const rangeInput=state?{min:$('priceMin').value,max:$('priceMax').value}:null;
+  const rangeDirty=rangeInput&&(rangeInput.min!==(state.matter.filters.price_min||'')||rangeInput.max!==(state.matter.filters.price_max||''));
   state=data;
   try{render();}catch(e){throw Error('报价方案已读取，但页面显示异常，请重新载入核对。');}
+  if(rangeDirty){$('priceMin').value=rangeInput.min;$('priceMax').value=rangeInput.max;}
   const pendingNotice=typeof Workbench!=='undefined'?Workbench.resolve(data):'';
   if(pendingNotice){blockWrites(pendingNotice,2);return false;}
   const resolvedNotice=typeof Workbench!=='undefined'?Workbench.notice():'';
@@ -144,7 +147,7 @@ async function act(op,extra={}){
  busy=true;
  try{
   if(!status('正在处理，尚未确认结果…')){blockWrites('页面提示异常，本次操作尚未发送。请重新载入核对。');return null;}
-  const failure=$('failSave').checked;$('failSave').checked=false;
+  const failure=before.data_kind!=='private_experience'&&$('failSave').checked;$('failSave').checked=false;
   if(typeof Workbench!=='undefined')Workbench.sent(op,requestId,extra,before.id);
   const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...extra,matter:before.id,version:before.version,request_id:requestId,op,simulate_failure:failure})});
   const data=await r.json();
@@ -197,15 +200,21 @@ function render(){
  }else $('rows').replaceChildren();
  if(typeof Workbench!=='undefined')Workbench.render(state);
  $('adjust').textContent=m.proposal?(m.fixture_set==='fictional-role-matrix-v1'?'预览建议修改范围':'采用建议并修改草稿'):'调整价格';
- $('context').textContent='已选 '+m.selected.length+' 项价格。分析和建议不会自动修改参考价。';
- $('conversation').replaceChildren(...m.conversation.map(x=>{const d=el('div',undefined,'message '+x.role);d.append(el('small',x.role+' · '+x.at),el('div',x.text));return d;}));$('conversation').scrollTop=$('conversation').scrollHeight;
- $('historyCount').textContent=`（${m.history.length} 条）`;$('history').replaceChildren(...[...m.history].reverse().map(h=>el('div',`修订 ${h.revision} · ${h.at} · ${h.actor}${h.undone?' · 已撤销':''}\n`+h.edits.map(e=>e.id+': '+money(e.old)+' → '+money(e.new)+' '+scopeUnitLabel(e.scope)).join('\n'),'history-entry')));
+ $('context').textContent='已选 '+m.selected.length+' 项价格，只有当前可见项参与比较。';
+ if(typeof Workbench!=='undefined')Workbench.renderDiscussion(state);
+ $('diagnosticTools').hidden=m.data_kind==='private_experience';
+ if(m.data_kind==='private_experience'){$('delay').checked=false;$('failSave').checked=false;}
+ $('conversation').replaceChildren(...m.conversation.map(x=>{const d=el('div',undefined,'message '+x.role),shown=x.role==='user'?x.text:readableConversation(x.text);d.append(el('small',({user:'我',assistant:'规则辅助',system:'提示'})[x.role]||'记录'),el('div',shown));const original=el('details');original.append(el('summary','查看原始记录'),el('small',x.at),el('div',x.text));d.append(original);return d;}));$('conversation').scrollTop=$('conversation').scrollHeight;
+ $('historyCount').textContent=`（${m.history.length} 条）`;$('history').replaceChildren(...[...m.history].reverse().map(h=>el('div',`修订 ${h.revision} · ${h.at} · ${({manual_preview_confirmed:'手动调整',manual:'手动调整',mock_ai_explicit_command:'规则指令调整',undo:'撤销'})[h.actor]||'调整记录'}${h.undone?' · 已撤销':''}\n`+h.edits.map(e=>priceLabel(state.rows.find(r=>r.id===e.id))+': '+money(e.old)+' → '+money(e.new)+' '+scopeUnitLabel(e.scope)).join('\n'),'history-entry')));
  const pending=Object.values(m.requests).filter(r=>r&&validPending(m,r.id));pendingToken=pending.length?pending[pending.length-1].id:null;
  $('finish').disabled=!pending.length;$('undo').disabled=m.fixture_set==='fictional-role-matrix-v1'||!m.history.some(h=>!h.undone&&h.actor!=='undo');
 }
-async function send(text){const sent=await act('ai_begin',{text});if(!sent)return;pendingToken=sent.token;$('message').value='';if(!$('delay').checked)await finish();}
+function priceLabel(row){if(!row)return '原价格项';const role=state.workbench&&state.workbench.price_type_labels&&state.workbench.price_type_labels[row.role]||({直销:'直销底价',经销:'经销底价',出厂:'出厂价',指导:'指导价',代理:'代理底价',OEM:'OEM底价',大客户权限:'大客户权限价'})[row.role]||row.role;return [row.family,row.configuration,role,row.market,scopeUnitLabel(row)].filter(Boolean).join(' · ');}
+function readableConversation(text){let shown=String(text).replaceAll('source_not_specified','未设固定数量档').replace(/\b(\d+)\.00\b/g,'$1').replaceAll('模拟分析（非真实语言理解）','规则辅助').replaceAll('模拟回应阻断','本次未执行');for(const row of state.rows)shown=shown.split(row.id).join(priceLabel(row));return shown;}
+async function readSaved(){const ok=await load();if(ok&&(hasUnsubmittedPrices()||(typeof Workbench!=='undefined'&&Workbench.hasUnsubmittedInquiry())||$('message').value.trim()||$('batch').value.trim()||$('priceMin').value!==(state.matter.filters.price_min||'')||$('priceMax').value!==(state.matter.filters.price_max||'')))status('已读取本机保存的本方案；尚未提交的输入仍保留，请核对后再保存。');return ok;}
+async function send(text){const input=$('message').value,generation=messageEditGeneration;const sent=await act('ai_begin',{text});if(!sent)return;pendingToken=sent.token;if(generation===messageEditGeneration&&$('message').value===input&&text===input)$('message').value='';if(state.matter.data_kind==='private_experience'||!$('delay').checked)await finish();}
 async function finish(){const token=pendingToken;if(!token)return;const result=await act('ai_finish',{token});if(result&&result.matter.requests[token].status==='stale')status('迟到回应已阻断；没有覆盖新编辑。记录已保存。',true);}
-$('reload').onclick=load;
+$('reload').onclick=readSaved;
 $('matter').onchange=()=>{if(typeof Workbench!=='undefined')Workbench.scopeIntent();if(busy||loading||writeBlockReason||hasUnsubmittedPrices()){$('matter').value=state?state.matter.id:mid();status(writeBlockReason||'仍有未完成的操作或价格输入，请先确认后再切换事项。',true);return;}pendingToken=null;location.href='/?matter='+encodeURIComponent($('matter').value);};
 $('newRound').onclick=async()=>{const title=prompt('新报价方案名称','新报价方案');if(title){const r=await act('new_round',{title});if(r)location.href='/?matter='+encodeURIComponent(r.new_matter);}};
 $('applyPriceRange').onclick=()=>act('view',{selected:state.matter.selected,filters:{...state.matter.filters,price_min:$('priceMin').value,price_max:$('priceMax').value}});
@@ -215,7 +224,8 @@ $('selectVisible').onclick=()=>act('view',{selected:state.rows.filter(r=>visible
 $('clearSelection').onclick=()=>act('view',{selected:[],filters:state.matter.filters});
 $('undo').onclick=()=>act('undo');$('adjust').onclick=()=>act('mode',{mode:'adjustment'});$('discuss').onclick=()=>act('mode',{mode:'discussion'});
 $('applyBatch').onclick=async()=>{try{const edits=$('batch').value.trim().split('\n').map(line=>{const p=line.trim().split(/\s+/);if(p.length!==2)throw Error('每行需包含精确行号与金额。');const r=state.rows.find(r=>r.id===p[0]);if(!r)throw Error('未找到价格编号 '+p[0]);return {id:r.id,old:state.matter.values[r.id],new:roundMoney(p[1]),scope:scope(r)};});const result=await act(state.matter.fixture_set==='fictional-role-matrix-v1'?'draft_preview':'edit',{edits});if(result)$('batch').value='';}catch(e){error(e);}};
-$('send').onclick=()=>send($('message').value);$('compare').onclick=()=>send('比较选中产品');$('finish').onclick=finish;$('duplicate').onclick=finish;
+$('send').onclick=()=>send($('message').value);$('compare').onclick=()=>send('比较选中价格');$('finish').onclick=finish;$('duplicate').onclick=finish;
+$('message').oninput=()=>{messageEditGeneration++;};
 $('search').onclick=async()=>{try{const r=await fetch('/api/search?matter='+encodeURIComponent(state.matter.id)+'&q='+encodeURIComponent($('query').value));const results=await r.json();if(!r.ok)throw Error(results.error);$('searchResults').replaceChildren(...results.map(x=>{const d=el('div',undefined,'search-result');d.append(el('small',x.title+' · '+x.at+' · '+(x.historical?'旧轮次草稿，非当前价格':'当前事项')),el('div',x.text));return d;}));if(!results.length)$('searchResults').textContent='当前和关联上一轮已查范围内未找到。';}catch(e){error(e);}};
 load();
 

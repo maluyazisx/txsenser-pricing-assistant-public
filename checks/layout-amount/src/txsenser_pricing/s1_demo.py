@@ -2,7 +2,7 @@
 from __future__ import annotations
 import argparse
 import copy
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -167,6 +167,20 @@ class OfflineProvider:
         selected = context['selected']
         details = '；'.join(f"{r['id']} {r['configuration']}：{r['draft']} {r['currency']}/{r['unit']}，{r['role']}，{r['tier']}" for r in selected)
         return '模拟分析（非真实语言理解）：' + (details or '请先选入要比较的合成行。') + '。各范围独立比较，不汇总混合币种/单位；不修改草稿。'
+
+
+def private_rule_reply(context):
+    rows = context['selected']
+    if not rows:
+        return '规则辅助：请先选择具体价格，再点“比较选中价格”。不会自动修改价格。'
+    lines = ['规则辅助：以下按当前选中价格逐项列出，不自动改价。']
+    def shown(raw):
+        return '待确认' if raw is None else format(Decimal(raw).quantize(Decimal('1'), rounding=ROUND_HALF_UP), ',f')
+    for row in rows:
+        role = PRICE_TYPE_LABELS.get(row['role'], row['role'])
+        lines.append(f"{row['family']} · {row['configuration']} · {role}：本方案已保存价 {shown(row.get('draft'))}；来源参考 {shown(row.get('baseline'))} {row.get('currency') or '币种待确认'}/{row.get('unit') or '单位待确认'}。")
+    lines.append('币种、单位和适用条件分别核对；批量采购请与公司另议，不自动套用数量折扣。')
+    return '\n'.join(lines)
 
 
 class Store:
@@ -386,15 +400,16 @@ class Store:
                         if match and m.get('fixture_set') != CATALOG_ID: edits=targets
                         else: proposal_edits=targets
                     answer = self.provider.respond(context)
+                    if m.get('data_kind') == 'private_experience': answer = private_rule_reply(context)
                     if raw.startswith('检索原文 '):
                         excerpts=self.search(mid,raw[len('检索原文 '):])
                         answer='模拟原文检索（当前与关联上一轮，最多30条）：\n'+'\n'.join(f"{e['at']} [{e['matter']}; {'旧轮次草稿，非当前价' if e['historical'] else '当前事项'}] {e['text']}" for e in excerpts)
                         if not excerpts: answer+='已查范围内未找到；不推断其他事项不存在记录。'
-                    if m.get('fixture_set') == CATALOG_ID and (match or suggestion): answer='有限模拟修改建议已准备，草稿未变；请预览范围并明确确认后保存。'
+                    if m.get('fixture_set') == CATALOG_ID and (match or suggestion): answer='调整建议已准备，价格尚未改变；请预览范围并确认后保存。'
                     elif suggestion: answer='仅讨论的合成建议已准备；草稿金额未变。主动点击“开始调整价格”才按当前精确范围采纳。'
                 except Rejected as e:
                     edits=[]; proposal_edits=[]; blocked_answer=str(e)
-                    answer='模拟回应阻断：'+blocked_answer+' 草稿未变。'
+                    answer=('本次未执行：' if m.get('data_kind')=='private_experience' else '模拟回应阻断：')+blocked_answer+' 价格未改变。'
                 m['generation']=m.get('generation',0)+1
                 m['proposal']=None  # A newer interaction invalidates an older unadopted proposal.
                 token = uuid.uuid4().hex

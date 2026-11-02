@@ -28,7 +28,7 @@ experience=dict(persona='ceo',copy_sha256='d'*64,rows=rows)
 store=Store(sys.argv[1],experience=experience,recover_pending=False)
 mid='experience-'+'d'*16
 with store.connect() as db:
- matter=store.read(db,mid);matter['values']['SYNTH-INQUIRY-0']='777.00';store.write(db,matter)
+ matter=store.read(db,mid);matter['values']['SYNTH-INQUIRY-0']='777.00';matter['selected']=['SYNTH-INQUIRY-0'];store.write(db,matter)
 if sys.argv[2]=='fixture-only':
  print(json.dumps(store.state(mid),ensure_ascii=False));sys.exit(0)
 server=ThreadingHTTPServer(('127.0.0.1',0),handler(store))
@@ -69,8 +69,8 @@ server.serve_forever()
       external.push(route.request().url());return route.abort();
     });
     const loaded=()=>page.waitForFunction(()=>document.getElementById('saveStatus').textContent.includes('价格已载入')&&!busy&&!loading);
-    const perform=async action=>{
-      const wait=page.waitForResponse(r=>r.url()===origin+'/api/action'&&r.request().method()==='POST'&&r.request().postDataJSON().op==='inquiry');
+    const perform=async (action,op='inquiry')=>{
+      const wait=page.waitForResponse(r=>r.url()===origin+'/api/action'&&r.request().method()==='POST'&&r.request().postDataJSON().op===op);
       await action();const response=await wait;assert.equal(response.status(),200);const data=await response.json();await page.waitForFunction(()=>!busy&&!loading);return data;
     };
     const inViewport=async selectors=>{
@@ -89,6 +89,21 @@ server.serve_forever()
     assert.equal(await page.evaluate(()=>state.matter.data_kind),'private_experience');assert.equal(initial.values['SYNTH-INQUIRY-0'],'777.00');
     for(const id of ['wbCustomerField','wbProjectField','openQuote','quoteSection'])assert.equal(await page.locator('#'+id).isVisible(),false);
     for(const id of ['wbCustomer','wbProject']){assert.equal(await page.locator('#'+id+' option').count(),0);assert.equal(await page.locator('#'+id).isDisabled(),true);}
+    await page.locator('#discuss').click();assert.equal(await page.locator('#diagnosticTools').isVisible(),false);
+    assert.match(await page.locator('#discussionSelected').innerText(),/合成产品1.*合成配置1.*直销底价/);
+    assert.deepEqual(await page.evaluate(()=>state.matter.selected),['SYNTH-INQUIRY-0']);
+    await page.locator('#chooseDiscussionPrices').click();
+    await perform(()=>page.locator('input[data-discussion-row="SYNTH-INQUIRY-1"]').check(),'view');
+    await page.locator('#finishDiscussionSelection').click();assert.equal(await page.locator('#editToolbar').isVisible(),false);assert.equal(await page.locator('input.price').count(),0);
+    await perform(()=>page.locator('button[data-remove-selection="SYNTH-INQUIRY-0"]').click(),'view');
+    await perform(()=>page.locator('#clearDiscussionPrices').click(),'view');assert.deepEqual(await page.evaluate(()=>state.matter.selected),[]);
+    await page.locator('#chooseDiscussionPrices').click();await perform(()=>page.locator('input[data-discussion-row="SYNTH-INQUIRY-0"]').check(),'view');await page.locator('#finishDiscussionSelection').click();
+    await perform(()=>page.locator('#compare').click(),'ai_finish');
+    const reply=await page.evaluate(()=>state.matter.conversation.at(-1).text);assert.match(reply,/规则辅助/);assert.match(reply,/合成产品1.*合成配置1.*直销底价/);assert.match(reply,/本方案已保存价 777.*来源参考 1,000/);assert.doesNotMatch(reply,/SYNTH-INQUIRY|source_not_specified|777\\.00/);
+    await page.locator('#discussionSelected').scrollIntoViewIfNeeded();await inViewport(['#chooseDiscussionPrices','#discussionSelected','#conversation']);
+    await page.screenshot({path:path.join(out,'usability-1-selected-rule-reply.png')});
+    const readSaved=async()=>{if(!await page.locator('#reload').isVisible())await page.locator('.more-actions > summary').click();const wait=page.waitForResponse(r=>r.url().startsWith(origin+'/api/state?'));await page.locator('#reload').click();assert.equal((await wait).status(),200);await page.waitForFunction(()=>!busy&&!loading);};
+    await page.locator('#message').fill('合成待发问题');await readSaved();assert.equal(await page.locator('#message').inputValue(),'合成待发问题');assert.match(await page.locator('#saveStatus').innerText(),/输入仍保留/);await page.locator('#message').fill('');await page.locator('#discuss').click();
     await inquiryView();
     const expected={wbProduct:'SYNTH-PRODUCT-0',wbMarket:'国内',wbApplication:'合成应用',wbRole:'直销',wbCurrency:'CNY',wbUnit:'台',wbConditions:'合成条件1（仅供检查）'};
     for(const [id,value]of Object.entries(expected))await page.locator('#'+id).selectOption(value);
@@ -96,12 +111,17 @@ server.serve_forever()
     const saved=await perform(()=>page.locator('#wbAnalyze').click());
     assert.equal(saved.inquiry_read.references[0].baseline,'1000.1234');assert.equal(saved.inquiry_read.execution_allowed,false);
     assert.equal(saved.matter.values['SYNTH-INQUIRY-0'],'777.00');assert.equal(saved.history_connection.status,'not_connected');
-    const analysis=await page.locator('#wbAnalysis').innerText();assert.match(analysis,/来源参考 1,000/);assert.doesNotMatch(analysis,/来源参考 777/);assert.match(analysis,/尚未接通/);
+    const analysis=await page.locator('#wbAnalysis').innerText();assert.match(analysis,/参考单价：1,000/);assert.doesNotMatch(analysis,/参考单价：777/);assert.match(analysis,/尚未接通/);
     await inquiryView();await page.screenshot({path:path.join(out,'inquiry-1-saved-reference.png')});
     await page.reload({waitUntil:'domcontentloaded'});await loaded();await inquiryView();
     for(const [id,value]of Object.entries(expected))assert.equal(await page.locator('#'+id).inputValue(),value);
-    assert.equal(await page.locator('#wbQuantity').inputValue(),'5');assert.match(await page.locator('#wbAnalysis').innerText(),/来源参考 1,000/);
+    assert.equal(await page.locator('#wbQuantity').inputValue(),'5');assert.match(await page.locator('#wbAnalysis').innerText(),/参考单价：1,000/);
     await page.screenshot({path:path.join(out,'inquiry-2-reopened.png')});
+    assert.equal(await page.locator('#wbAnalyze').innerText(),'核对价格并保存');assert.match(await page.locator('#wbAnalysis').innerText(),/价格核对结果/);
+    assert.equal(await page.getByText('查看价格依据',{exact:true}).count(),1);
+    await page.locator('#wbQuantity').fill('7');await readSaved();assert.equal(await page.locator('#wbQuantity').inputValue(),'7');assert.equal(await page.evaluate(()=>state.matter.inquiry_request.terms.quantity),'5');
+    assert.match(await page.locator('#wbAnalysis').innerText(),/旧结果不代表当前输入/);await inquiryView();
+    await page.screenshot({path:path.join(out,'usability-2-unsubmitted-inquiry-retained.png')});
 
     // Delay the actual successful server response; never fabricate the saved body.
     let enter,release;const entered=new Promise(r=>enter=r),gate=new Promise(r=>release=r);let delayed=false;
@@ -139,7 +159,7 @@ server.serve_forever()
     assert.deepEqual(final.history,[]);assert.deepEqual(final.quotes,[]);assert.equal(final.request.terms.quantity,'9');
     assert.ok(final.rows.every(r=>r.quote_eligible===false&&r.min_quantity===null&&r.max_quantity===null));
     assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(!requests.includes('/api/price-export')&&!requests.includes('/api/fx'));
-    const result={status:'PRIVATE_INQUIRY_GUI_PASS',viewport:'1512x828',screenshots:4,actualUISaveAndReload:true,visibleConditionsAndResult:true,fictionalIdentityControlsAbsent:true,sourceReferenceNotSavedDraft:true,lateInputPreserved:true,historyState:'not_connected',privateQuoteUIClosed:true,privateQuoteAPIRejected:2,sourceAndSavedPricesUnchanged:true,adjustmentHistory:0,quoteRecords:0,sandbox:true,externalRequests:0,providerBound:false,exportsRun:false,layoutMatrixRerun:false,limit:'invented private fixture only; no real data, provider, deployment or publication acceptance'};
+    const result={status:'PRIVATE_USABILITY_GUI_PASS',viewport:'1512x828',screenshots:6,discussionSelectionUsesViewOnly:true,reloadPreservesUnsavedInquiryAndMessage:true,privateDiagnosticsHidden:true,naturalRuleReply:true,actualUISaveAndReload:true,visibleConditionsAndResult:true,fictionalIdentityControlsAbsent:true,sourceReferenceNotSavedDraft:true,lateInputPreserved:true,historyState:'not_connected',privateQuoteUIClosed:true,privateQuoteAPIRejected:2,sourceAndSavedPricesUnchanged:true,adjustmentHistory:0,quoteRecords:0,sandbox:true,externalRequests:0,providerBound:false,exportsRun:false,layoutMatrixRerun:false,limit:'invented private fixture only; no real data, provider, deployment or publication acceptance'};
     fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
   } finally {
     if(browser)await browser.close();
