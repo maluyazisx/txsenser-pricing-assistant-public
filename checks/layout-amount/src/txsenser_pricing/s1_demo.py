@@ -12,6 +12,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 import uuid
 
+from .s1_inquiry_read import InquiryRejected, analyze_reference, normalize_terms, history_state
 from .s1_workbench import (CATALOG_ID, DEMO_MATTER, MATRIX_ROWS, LEGACY_MATRIX_ROWS, CUSTOMERS, PROJECTS, ROLES, PRICE_TYPE_ORDER, PRICE_TYPE_LABELS, CONDITIONS, OPS,
     WorkbenchRejected, analyze, prepare_quote, confirm_quote, replay_quote)
 
@@ -169,7 +170,7 @@ class OfflineProvider:
 
 
 class Store:
-    def __init__(self, path, provider=None, recover_pending=True, matrix_demo=False, experience=None):
+    def __init__(self, path, provider=None, recover_pending=True, matrix_demo=False, experience=None, history_reader=None):
         self.marker = PRIVATE_COPY_MARKER if experience is not None else MARKER
         if experience is not None and experience.get('persona') not in ('ceo','sales_director','sales_admin','sales'):
             raise Rejected('查看身份未识别；未打开或修改体验库。')
@@ -189,6 +190,7 @@ class Store:
             except (sqlite3.Error, json.JSONDecodeError) as e:
                 raise Rejected('无法验证S1合成存储标记；拒绝修改。') from e
         self.provider = provider or OfflineProvider()
+        self.history_reader = history_reader  # Explicit read-only injection; no default real binding.
         with self.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS meta (marker TEXT NOT NULL)')
             marker = db.execute('SELECT marker FROM meta').fetchall()
@@ -248,16 +250,24 @@ class Store:
         with self.connect() as db:
             m = self.read(db, mid)
             summaries = [dict(id=x['id'], title=x['title'], parent=x['parent'], created=x['created']) for x in [json.loads(p) for (p,) in db.execute('SELECT payload FROM matters')]]
-            history = self.workbench_history(db) if m.get('fixture_set') == CATALOG_ID else []
+            history = self.workbench_history(db) if m.get('fixture_set') == CATALOG_ID and m.get('data_kind') != 'private_experience' else []
         rows = catalog(m)
         result = dict(marker=self.marker, matter=m, matters=summaries,
             rows=[dict(r, blocked=private_draft_blocked(r, rows, m), quote_blocked=blocked(r, rows),
                 experience_draft_only=m.get('data_kind')=='private_experience' and blocked(r, rows) is not None and private_draft_blocked(r, rows, m) is None) for r in rows], visible_ids=[r['id'] for r in rows if visible(r,m['filters'])], provider='offline-deterministic-mock')
         if m.get('fixture_set') == CATALOG_ID:
             products = {r['product_id']: dict(id=r['product_id'], label=r['family']+' / '+r['configuration']) for r in rows}
-            result.update(workbench_history=history, workbench=dict(customers=CUSTOMERS, projects=PROJECTS,
+            private = m.get('data_kind') == 'private_experience'
+            result.update(workbench_history=history, workbench=dict(customers={} if private else CUSTOMERS, projects={} if private else PROJECTS,
                 products=list(products.values()), roles=[role for role in PRICE_TYPE_ORDER if any(r['role']==role for r in rows)],
                 price_type_labels=PRICE_TYPE_LABELS, conditions=sorted({r['conditions'] for r in rows if isinstance(r.get('conditions'),str) and r['conditions']}) if m.get('data_kind')=='private_experience' else CONDITIONS))
+            if private:
+                request = m.get('inquiry_request')
+                reader = self.history_reader if m.get('persona') == 'ceo' else None
+                result['inquiry_read'] = (analyze_reference(request['terms'], rows,
+                    as_of=request['as_of'], history_reader=reader) if request else None)
+                result['history_connection'] = (result['inquiry_read']['history'] if result['inquiry_read'] else
+                    history_state('not_connected' if reader is None else 'identity_unresolved'))
         return result
 
     def context(self, m):
@@ -307,6 +317,8 @@ class Store:
             db.execute('BEGIN IMMEDIATE')
             m = self.read(db, mid)
             rows = catalog(m); by_id = {r['id']: r for r in rows}
+            if m.get('data_kind') == 'private_experience' and op in ('quote_preview', 'quote_confirm'):
+                raise Rejected('私有询价仅作来源参考，不能在体验库保存已报价记录。')
             if m.get('fixture_set') == CATALOG_ID:
                 try:
                     replay = replay_quote(m, req)
@@ -419,8 +431,14 @@ class Store:
                         result['confirmed_token'] = preview['token']
                         m['draft_preview'] = None
                     elif op == 'inquiry':
-                        m['inquiry'] = analyze(req.get('terms'), rows, self.workbench_history(db))
-                        result['analysis'] = copy.deepcopy(m['inquiry'])
+                        if m.get('data_kind') == 'private_experience':
+                            try: terms = normalize_terms(req.get('terms'))
+                            except InquiryRejected as e: raise WorkbenchRejected(str(e)) from e
+                            # Persist only the inquiry inputs, never copy shared history into this Store.
+                            m['inquiry_request'] = dict(schema='private-inquiry-request.v1', terms=terms, as_of=now())
+                        else:
+                            m['inquiry'] = analyze(req.get('terms'), rows, self.workbench_history(db))
+                            result['analysis'] = copy.deepcopy(m['inquiry'])
                     elif op == 'quote_preview':
                         result.update(prepare_quote(m, req, self.workbench_history(db), amount, rows))
                     elif op == 'quote_cancel':

@@ -31,13 +31,10 @@ jobs:
           python3 --version
           python3 -c "import hashlib,json,pathlib; m=json.loads(pathlib.Path('deploy/public-check.manifest.json').read_text()); assert all(len(pathlib.Path(x['path']).read_bytes())==x['bytes'] and hashlib.sha256(pathlib.Path(x['path']).read_bytes()).hexdigest()==x['sha256'] for x in m['files'])"
           node --version
-          python3 -m py_compile src/txsenser_pricing/s1_demo.py src/txsenser_pricing/s1_workbench.py
+          python3 -m py_compile src/txsenser_pricing/s1_demo.py src/txsenser_pricing/s1_workbench.py src/txsenser_pricing/s1_inquiry_read.py src/txsenser_pricing/product_pricing_contracts.py src/txsenser_pricing/product_pricing_read_zh.py
           node --check src/txsenser_pricing/s1_static/app.js
           node --check src/txsenser_pricing/s1_static/workbench.js
-      - name: Check exact amount display and affected column rules
-        run: |
-          node tests/test_s1_price_display.cjs
-          node tests/test_s1_price_table.cjs --display-only
+          node --check tests/browser_private_inquiry.cjs
       - name: Prepare only the browser driver
         run: npm install --prefix "$RUNNER_TEMP/preview-driver" --no-save --ignore-scripts playwright@1.55.1
       - name: Add Chinese fonts to the disposable cloud runner
@@ -45,18 +42,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends fonts-noto-cjk
           fc-match 'sans-serif:lang=zh-cn' | grep -q 'NotoSansCJK'
-      - name: Check six layouts and exact amount restore in one synthetic browser
+      - name: Check private inquiry save and reopen in one synthetic browser
         env:
           NODE_PATH: ${{ runner.temp }}/preview-driver/node_modules
           CHROME_PATH: /usr/bin/google-chrome
-        run: node tests/browser_price_export.cjs --layout-and-amount
+        run: node tests/browser_private_inquiry.cjs
       - name: Retain only affected synthetic browser evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pricing-synthetic-browser-${{ github.sha }}
           path: |
-            checks/layout-amount/test-results/price-table/layout-*.png
-            checks/layout-amount/test-results/price-table/amount-*.png
+            checks/layout-amount/test-results/private-inquiry/inquiry-*.png
+            checks/layout-amount/test-results/private-inquiry/result.json
           if-no-files-found: error
           retention-days: 7
 

@@ -1,15 +1,17 @@
 'use strict';
-// Fictional business flow only; uses the existing matter/action Store and guards.
+// Existing demo flow and private reference inquiries; no shared-history writes.
 const Workbench = (() => {
  const CATALOG='fictional-role-matrix-v1';
  let initialized=false,formDirty=false,correction=null,quoteEditGeneration=0,pane='prices',editing=false,detailRowId=null;
  let pending=null,resolutionNotice='',batchMode=false,previousSelection=[],draftEditGeneration=0,invalidDraftToken=null,exportBusy=false,activePanel=null,returnFocus=null,shownPreviewKey=null;
  let exportScopeGeneration=0;
+ let inquiryDirty=false,inquiryGeneration=0;
  function scopeIntent(){exportScopeGeneration++;}
  try{const raw=typeof sessionStorage!=='undefined'&&sessionStorage.getItem('s1-workbench-pending');if(raw){const p=JSON.parse(raw);if(p&&p.op==='quote_confirm'&&typeof p.matter==='string'&&typeof p.request_id==='string'&&typeof p.token==='string')pending=p;}}catch(_){}
  const node=id=>document.getElementById(id);
  const elem=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
  const current=()=>typeof state!=='undefined'&&state&&state.matter.fixture_set===CATALOG;
+ const privateInquiry=()=>current()&&state.matter.data_kind==='private_experience';
  function keepPending(value){pending=value;try{if(typeof sessionStorage!=='undefined'){if(value)sessionStorage.setItem('s1-workbench-pending',JSON.stringify(value));else sessionStorage.removeItem('s1-workbench-pending');}}catch(_){} }
  function sent(op,id,extra,matter){if(op==='quote_confirm')keepPending({op,matter,request_id:id,token:extra.token});}
  function finished(op){if(op==='quote_confirm')keepPending(null);}
@@ -23,6 +25,7 @@ const Workbench = (() => {
   return '报价保存结果待核，尚未找到对应确认回执；请重新载入核对，勿重复提交。';
  }
  function accepted(op,extra,before,data,requestId){
+  if(op==='inquiry'&&before.data_kind==='private_experience')return !!(data.matter.inquiry_request&&data.matter.inquiry_request.schema==='private-inquiry-request.v1'&&same(data.matter.inquiry_request.terms,extra.terms)&&data.inquiry_read&&data.inquiry_read.kind==='private_reference_inquiry'&&same(data.inquiry_read.terms,extra.terms)&&data.inquiry_read.execution_allowed===false);
   if(op==='quote_confirm'){
    const record=data.record,receipt=data.matter.quote_receipts&&data.matter.quote_receipts[extra.token];
    return !!(record&&receipt&&receipt.record&&Array.isArray(data.matter.quote_records)&&record.token===extra.token&&record.phase==='quoted_demo'&&record.id===receipt.record.id&&record.version===receipt.record.version&&
@@ -171,26 +174,59 @@ const Workbench = (() => {
    const url=URL.createObjectURL(blob),link=elem('a');try{link.href=url;link.download='price-table-'+basis+'.'+format;document.body.append(link);link.click();}finally{if(typeof link.remove==='function')link.remove();URL.revokeObjectURL(url);}node('exportStatus').textContent='已生成'+(basis==='saved'?'已保存调整价格':'来源参考价格')+'文件；未发送或正式发布。';
   }catch(error){node('exportStatus').textContent=error.message||'导出未完成，请核对范围。';}finally{exportBusy=false;syncExportSummary(state);}
  }
- function showPane(next){pane=next;renderAll();const target=next==='prices'?node('roleMatrix'):node('businessWorkbench');if(target&&typeof target.scrollIntoView==='function')target.scrollIntoView({block:'start',behavior:'smooth'});}
+ function showPane(next){if(privateInquiry()&&next==='quote')next='inquiry';pane=next;renderAll();const target=next==='prices'?node('roleMatrix'):node('businessWorkbench');if(target&&typeof target.scrollIntoView==='function')target.scrollIntoView({block:'start',behavior:'smooth'});}
  function fillSelect(id,entries){const s=node(id),prior=s.value;s.replaceChildren(...[['','请选择'],...entries].map(([value,label])=>{const o=elem('option',String(label).replace(/^虚构 /,''));o.value=value;return o;}));if(entries.some(([value])=>value===prior))s.value=prior;}
  function initialize(data){
   if(initialized)return;initialized=true;node('exportAudience').value=data.matter.persona||'ceo';
   fillSelect('wbCustomer',Object.entries(data.workbench.customers));fillSelect('wbProject',Object.entries(data.workbench.projects));fillSelect('wbProduct',data.workbench.products.map(p=>[p.id,p.label]));
   for(const [id,key] of [['wbMarket','market'],['wbApplication','application'],['wbRole','role'],['wbCurrency','currency'],['wbUnit','unit']])fillSelect(id,[...new Set(data.rows.map(r=>r[key]))].map(v=>[v,v]));
   fillSelect('wbConditions',data.workbench.conditions.map(v=>[v,v]));
-  for(const id of ['wbCustomer','wbProject','wbProduct','wbMarket','wbApplication','wbRole','wbCurrency','wbUnit','wbConditions','wbQuantity','wbAmount','wbReason'])node(id).oninput=node(id).onchange=()=>{quoteEditGeneration++;formDirty=true;node('wbQuoteConfirm').disabled=true;node('wbAcknowledged').checked=false;};
+  if(data.matter.data_kind==='private_experience'){
+   for(const id of ['wbCustomer','wbProject']){node(id).replaceChildren();node(id).value='';node(id).disabled=true;}
+   const saved=data.matter.inquiry_request&&data.matter.inquiry_request.terms;
+   if(saved)for(const [key,id]of [['product_id','wbProduct'],['market','wbMarket'],['application','wbApplication'],['role','wbRole'],['quantity','wbQuantity'],['currency','wbCurrency'],['unit','wbUnit'],['conditions','wbConditions']]){
+    if(key==='conditions'&&saved[key]&&!data.workbench.conditions.includes(saved[key])){const option=elem('option',saved[key]);option.value=saved[key];node(id).append(option);}
+    node(id).value=saved[key]||'';
+   }
+   else for(const [key,id]of [['market','wbMarket'],['application','wbApplication'],['currency','wbCurrency'],['unit','wbUnit'],['conditions','wbConditions']]){const values=[...new Set(data.rows.map(r=>r[key]).filter(v=>typeof v==='string'&&v))];if(values.length===1)node(id).value=values[0];}
+  }
+  for(const id of ['wbCustomer','wbProject','wbProduct','wbMarket','wbApplication','wbRole','wbCurrency','wbUnit','wbConditions','wbQuantity','wbAmount','wbReason'])node(id).oninput=node(id).onchange=()=>{quoteEditGeneration++;formDirty=true;node('wbQuoteConfirm').disabled=true;node('wbAcknowledged').checked=false;if(privateInquiry()){inquiryGeneration++;inquiryDirty=true;for(const host of ['wbAnalysis','wbHistory'])node(host).replaceChildren(elem('p','询价条件已变化，请重新核对并保存；旧结果不代表当前输入。'));}};
  }
  function terms(){return Object.fromEntries([['customer_id','wbCustomer'],['project_id','wbProject'],['product_id','wbProduct'],['market','wbMarket'],['application','wbApplication'],['role','wbRole'],['quantity','wbQuantity'],['currency','wbCurrency'],['unit','wbUnit'],['conditions','wbConditions']].map(([key,id])=>[key,node(id).value]));}
  function quoteInput(){return {terms:terms(),amount:node('wbAmount').value,...(correction?{quote_id:correction.id,expected_version:correction.version,reason:node('wbReason').value}:{})};}
  function describeTerms(t){const options=state.workbench;const product=options.products.find(p=>p.id===t.product_id);return [options.customers[t.customer_id],options.projects[t.project_id],product?product.label:t.product_id,t.market,t.application,t.role,'数量 '+t.quantity,t.currency+'/'+t.unit,t.conditions].join(' · ');}
+ function renderReadHistory(host,history){
+  const labels={not_connected:'共享报价历史尚未接通；当前可核对来源参考与询价条件。',identity_unresolved:'客户、项目或产品配置关联尚未确认；未查询该范围历史。',unavailable:'共享历史暂时不可用，本次未完成核对。',ready_empty:'本次查询时点和范围内未返回可参考历史。',ready_records:'已取得历史参考；条件不同不自动沿用金额。'};
+  const h=history||{status:'not_connected'};host.append(elem('p',labels[h.status]||labels.unavailable));
+  if(h.status==='ready_records'||h.status==='ready_empty'){
+   host.append(elem('p','查询时间：'+(h.as_of||'待核对')+'；知识截至：'+(h.knowledge_as_of||'待核对')));
+   if(h.detail){const details=elem('details');details.append(elem('summary','查看历史依据与适用限制'),elem('div',h.detail,'history-entry'));host.append(details);}
+  }
+ }
+ function renderPrivateInquiry(data){
+  node('wbAnalyze').textContent='核对并保存询价条件';node('wbQuotePrepare').disabled=true;node('wbQuoteConfirm').disabled=true;
+  const analysis=data.inquiry_read;node('wbAnalysis').replaceChildren();node('wbHistory').replaceChildren();
+  if(inquiryDirty){for(const host of ['wbAnalysis','wbHistory'])node(host).append(elem('p','询价条件已变化，请重新核对并保存；旧结果不代表当前输入。'));return;}
+  if(analysis){
+   node('wbAnalysis').append(elem('strong',analysis.status==='REFERENCE_ONLY'?'来源参考核对':analysis.status==='NEEDS_INFO'?'待补条件':'未找到唯一来源参考'),elem('p',analysis.reason));
+   if(analysis.missing.length)node('wbAnalysis').append(elem('p','请补充：'+analysis.missing.join('、')));
+   for(const ref of analysis.references)node('wbAnalysis').append(elem('p','来源参考 '+money(ref.baseline)+' '+ref.currency+'/'+ref.unit+' · '+typeLabel(ref.role)+' · '+(ref.conditions||'商务条件待核对')),elem('p','来源：'+(ref.source||'来源待核对')+'；当前性：'+(ref.effective||'未提供现行依据')+'；批准线索：'+(ref.approval||'未提供批准线索')));
+   for(const difference of analysis.differences)node('wbAnalysis').append(elem('p',difference));
+   renderReadHistory(node('wbAnalysis'),analysis.history);
+  }else node('wbAnalysis').append(elem('p','选择产品与参考条件后核对；这里只保存询价条件，不生成已报价记录。'));
+  renderReadHistory(node('wbHistory'),data.history_connection);
+ }
  function render(data){
   const enabled=data.matter.fixture_set===CATALOG;node('openPrices').hidden=pane==='prices';node('businessWorkbench').hidden=!enabled||pane==='prices';node('roleViewControls').hidden=!enabled;node('inquirySection').hidden=pane==='history';node('quoteSection').hidden=pane!=='quote';node('historySection').hidden=pane!=='history';
   if(!enabled)return;initialize(data);
+  const isPrivate=data.matter.data_kind==='private_experience';node('openQuote').hidden=isPrivate;node('quoteSection').hidden=isPrivate||pane!=='quote';node('wbCustomerField').hidden=isPrivate;node('wbProjectField').hidden=isPrivate;node('wbPrivateHint').hidden=!isPrivate;
+  node('wbPrivateHint').textContent='来源参考询价：保存条件供下次继续核对；不代表正式报价或已向客户报出。客户与项目将在共享历史接通并确认身份后关联。';node('wbQuantityLabel').textContent=isPrivate?'本次询价数量（可留空）':'数量';node('wbHistoryTitle').textContent=isPrivate?'共享报价历史（只读）':'报价历史';
   node('discussionHint').textContent='按当前选择提供规则辅助分析；调整建议须预览、确认。';
   const m=data.matter,preview=m.draft_preview;if(!editing||!preview){node('draftPreviewPanel').hidden=true;if(activePanel==='draftPreviewPanel')closePanel();}
   syncDraftConfirm();
   if(preview){node('draftPreviewRows').replaceChildren(...preview.edits.map(edit=>{const row=data.rows.find(r=>r.id===edit.id);return elem('p',[row.family,row.configuration,edit.scope.market||'市场待确认',typeLabel(edit.scope.role),quantityText(row),money(edit.old)+' → '+money(edit.new)+'（变化 '+moneyDelta(edit.new,edit.old)+'）',scopeUnitLabel(edit.scope)].join(' · '));}));}
   if(preview&&editing){const key=m.id+'|'+preview.token+'|'+preview.prepared_version;if(shownPreviewKey!==key){shownPreviewKey=key;openPanel('draftPreviewPanel','draftPreviewTitle');}}
+  if(isPrivate){renderPrivateInquiry(data);return;}
   const analysis=m.inquiry;node('wbAnalysis').replaceChildren();for(const id of ['wbCustomer','wbProject','wbProduct','wbMarket','wbApplication','wbRole','wbQuantity','wbCurrency','wbUnit','wbConditions'])node(id).className='';
   if(analysis){
    const labels={NEEDS_INFO:'待补条件',BLOCKED:'暂无可用报价',NEEDS_CONFIRMATION:'条件待确认',AVAILABLE_DEMO:'参考条件匹配'};
@@ -223,15 +259,21 @@ const Workbench = (() => {
   node('restoreSelection').onclick=async()=>{const prior=previousSelection;previousSelection=state.matter.selected.slice();await act('view',{selected:prior.filter(id=>state.rows.some(r=>r.id===id&&selectable(r))),filters:state.matter.filters});syncDraftConfirm();};
   node('draftConfirm').onclick=async()=>{if(!canConfirmDraft()){status('预览后输入或范围已变化；请重新预览再确认。',true);return null;}const result=await act('draft_confirm',{token:state.matter.draft_preview.token});if(result)closePanel();return result;};
   node('draftCancel').onclick=async()=>{const before=state.matter.draft_preview;const result=await act('draft_cancel');if(result&&before){for(const edit of before.edits)inputsFor(state.matter.id).delete(edit.id);closePanel();renderAll();}};
-  node('wbAnalyze').onclick=async()=>{const result=await act('inquiry',{terms:terms()});if(result&&result.analysis&&result.analysis.references.length&&!correction)node('wbAmount').value=roundMoney(result.analysis.references[0].amount);};
+  node('wbAnalyze').onclick=async()=>{
+   const input=terms(),generation=inquiryGeneration,matter=state.matter.id,isPrivate=privateInquiry();
+   const result=await act('inquiry',{terms:input});
+   if(isPrivate&&result){inquiryDirty=generation!==inquiryGeneration||JSON.stringify(input)!==JSON.stringify(terms())||matter!==state.matter.id;renderAll();status(inquiryDirty?'已保存提交时的询价条件；新输入保留，请重新核对并保存。':'询价条件已保存；来源参考不代表正式报价。',inquiryDirty);}
+   else if(result&&result.analysis&&result.analysis.references.length&&!correction)node('wbAmount').value=roundMoney(result.analysis.references[0].amount);
+  };
   node('wbQuotePrepare').onclick=async()=>{
+   if(privateInquiry()){status('私有询价只保存条件，不生成已报价记录。',true);return null;}
    try{node('wbAmount').value=roundMoney(node('wbAmount').value);}catch(_){node('wbAmount').className='field-missing';status('请输入本次报价金额。',true);return null;}
    const input=quoteInput(),identity=JSON.stringify(input),generation=quoteEditGeneration,matter=state.matter.id;
    const result=await act('quote_preview',input);
    if(result){formDirty=generation!==quoteEditGeneration||identity!==JSON.stringify(quoteInput())||matter!==state.matter.id;node('wbAcknowledged').checked=false;node('wbQuoteConfirm').disabled=formDirty;if(formDirty)status('预览期间输入已变化；保留新输入，请重新预览再确认。',true);}
   };
   node('wbQuoteCancel').onclick=async()=>{const result=await act('quote_cancel');if(result){correction=null;formDirty=false;node('wbAcknowledged').checked=false;node('wbCorrection').textContent='';}};
-  node('wbQuoteConfirm').onclick=async()=>{if(formDirty||!state.matter.quote_preview||state.matter.quote_preview.prepared_version!==state.matter.version)return;const result=await act('quote_confirm',{token:state.matter.quote_preview.token,acknowledged:node('wbAcknowledged').checked});if(result){correction=null;node('wbCorrection').textContent='';node('wbAcknowledged').checked=false;}};
+  node('wbQuoteConfirm').onclick=async()=>{if(privateInquiry()||formDirty||!state.matter.quote_preview||state.matter.quote_preview.prepared_version!==state.matter.version)return;const result=await act('quote_confirm',{token:state.matter.quote_preview.token,acknowledged:node('wbAcknowledged').checked});if(result){correction=null;node('wbCorrection').textContent='';node('wbAcknowledged').checked=false;}};
  }
  const renderAll=()=>{if(typeof state!=='undefined'&&state)globalThis.render();};
  return {catalog:CATALOG,groupRows,renderMatrix,render,syncDraftConfirm,previewSelected,sent,finished,resolve,accepted,duplicate,setup,scopeIntent,notice:()=>{const text=resolutionNotice;resolutionNotice='';return text;}};
