@@ -38,8 +38,8 @@
     },
     {
       "path": "src/txsenser_pricing/s1_static/workbench.js",
-      "bytes": 47559,
-      "sha256": "e38a1945af61027b3a53a08af951f99a86f890fc71a5a7e268521cbdfa2ad0ee"
+      "bytes": 48072,
+      "sha256": "3354b79b8c5de53c90fd36651007470234e119c1c9f5cae85bfcbf75176ab5a2"
     },
     {
       "path": "src/txsenser_pricing/s1_static/index.html",
@@ -58,8 +58,8 @@
     },
     {
       "path": "tests/browser_history_reference.cjs",
-      "bytes": 11580,
-      "sha256": "4986f2e94412d9289db00ece6576d8aa0972cc3b401a51c67a08397ff1d2f686"
+      "bytes": 14292,
+      "sha256": "167ccb1b8b35cd042ed1dd7de76f29f4390fb0d15472ddc0569926ac270c026c"
     }
   ]
 }

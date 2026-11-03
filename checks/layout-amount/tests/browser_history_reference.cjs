@@ -19,14 +19,14 @@ row.update(id='SYNTH-HISTORY-ROW',product_id='SYNTH-LOCAL-PRODUCT',family='合�
 class Reader:
  def historical_pricing_lookup(self,q):
   mode=Path(sys.argv[2]).read_text().strip()
-  record=dict(record_kind='pricing_evidence',record_id='PE-SYNTH',revision_id='R-NEW' if mode=='changed' else 'R-1',revision_digest='digest-new' if mode=='changed' else 'digest-1',price_nature='historical_pricing_evidence',temporal_status='historical',allowed_uses=['internal_history'],customer_link={'customer_id':'AC-SYNTH','validation_state':'confirmed'},opportunity_link={},product_links=[{'product_id':'P-SYNTH','configuration_id':'CFG-SYNTH'}],commercial_classification=['customer_specific'],stage_facts=[dict(stage_fact_id='F-SYNTH',stage_kind='payment_received',amount='120.3456',amount_nature='total_received',coverage='partial',occurred_at=None)],comparison_limitations=['仅供内部参考，部分收款不能作单价。'],source_refs=['synthetic:history'])
+  record=dict(record_kind='pricing_evidence',record_id='PE-SYNTH',revision_id='R-NEW' if mode=='changed' else 'R-1',revision_digest='digest-new' if mode=='changed' else 'digest-1',price_nature='historical_pricing_evidence',temporal_status='historical',allowed_uses=['internal_history'],customer_link={'customer_id':'AC-SYNTH','validation_state':'confirmed'},opportunity_link={'opportunity_id':'OP-SYNTH','validation_state':'confirmed'},product_links=[{'product_id':'P-SYNTH','configuration_id':'CFG-SYNTH'}],commercial_classification=['customer_specific'],stage_facts=[dict(stage_fact_id='F-SYNTH',stage_kind='payment_received',amount='120.3456',amount_nature='total_received',coverage='partial',occurred_at=None)],comparison_limitations=['仅供内部参考，部分收款不能作单价。'],source_refs=['synthetic:history'])
   empty=mode=='empty'
   return ReadEnvelope(query_id='SYNTHETIC-QUERY',as_of=q.as_of,knowledge_as_of='2026-10-01T00:00:00Z',brain_publication_id='PUB-SYNTH',brain_publication_digest='pub-digest',freshness='snapshot',match_status='not_found' if empty else 'exact',matched_scope={},missing_inputs=(),reconciliation_refs=(),purpose='internal_history',external_use='restricted',historical=() if empty else (record,),unknown=({'reasons':['retracted']},) if empty else (),publication_status='candidate',execution_allowed=False)
-adapter=C1HistoryReadAdapter(Reader(),scopes={('AC-SYNTH','','SYNTH-LOCAL-PRODUCT'):('P-SYNTH','CFG-SYNTH')},publication_id='PUB-SYNTH',publication_digest='pub-digest',coverage_confirmed=True,shared_history=SimpleNamespace(account_ids={'AC-SYNTH'},opportunity_accounts=()))
+adapter=C1HistoryReadAdapter(Reader(),scopes={('AC-SYNTH','OP-SYNTH','SYNTH-LOCAL-PRODUCT'):('P-SYNTH','CFG-SYNTH')},publication_id='PUB-SYNTH',publication_digest='pub-digest',coverage_confirmed=True,shared_history=SimpleNamespace(account_ids={'AC-SYNTH'},opportunity_accounts=(('OP-SYNTH','AC-SYNTH'),)))
 experience=dict(persona='ceo',copy_sha256='f'*64,rows=[row])
 store=Store(sys.argv[1],experience=experience,history_reader=adapter,recover_pending=False)
 mid='experience-'+'f'*16
-terms=dict(customer_id='AC-SYNTH',project_id='',product_id=row['product_id'],market=row['market'],application=row['application'],role=row['role'],quantity='5',currency=row['currency'],unit=row['unit'],conditions=row['conditions'])
+terms=dict(customer_id='AC-SYNTH',project_id='OP-SYNTH',product_id=row['product_id'],market=row['market'],application=row['application'],role=row['role'],quantity='5',currency=row['currency'],unit=row['unit'],conditions=row['conditions'])
 store.action(dict(matter=mid,op='inquiry',request_id='SYNTHETIC-INQUIRY',version=0,terms=terms))
 if sys.argv[3]=='fixture-only':
  print(json.dumps(store.state(mid),ensure_ascii=False));sys.exit(0)
@@ -45,7 +45,8 @@ server.serve_forever()
    console.log(JSON.stringify({status:'HISTORY_REFERENCE_FIXTURE_PREPARED',syntheticEnvelope:true,realAdapterAndStore:true,browser:false,listener:false,realProvider:false}));return;
   }
   assert.notEqual(typeof process.getuid==='function'?process.getuid():-1,0,'Normal Chrome sandbox requires non-root');
-  const {chromium}=require('playwright'),out=path.join(root,'test-results/history-reference');fs.mkdirSync(out,{recursive:true});
+  const identityOnly=process.argv.includes('--identity-retention');
+  const {chromium}=require('playwright'),out=path.join(root,identityOnly?'test-results/history-identity':'test-results/history-reference');fs.mkdirSync(out,{recursive:true});
   server=spawn('python3',['-B','-u','-c',fixture,db,mode,'serve'],{cwd:root,env,stdio:['ignore','pipe','pipe']});
   const url=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Synthetic startup timed out')),10000);server.stdout.on('data',b=>{text=(text+b).slice(-4096);const m=text.match(/http:\/\/127\.0\.0\.1:\d+\/\?matter=experience-f+/);if(m){clearTimeout(timer);resolve(m[0]);}});server.once('exit',()=>{clearTimeout(timer);reject(Error('Synthetic fixture exited'));});});
   const origin=new URL(url).origin;browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/google-chrome',chromiumSandbox:true,headless:true});
@@ -58,6 +59,17 @@ server.serve_forever()
   const shot=async name=>{await page.locator('#wbHistory').scrollIntoViewIfNeeded();await page.waitForFunction(()=>{const n=document.getElementById('wbHistory'),r=n.getBoundingClientRect();return r.width>0&&r.height>0&&r.top>=0&&r.bottom<=innerHeight;});await page.screenshot({path:path.join(out,name+'.png')});};
   await page.goto(url,{waitUntil:'domcontentloaded'});await idle();const initial=(await read()).matter;await history();
   assert.equal(await page.locator('#wbCustomerField').isVisible(),false);assert.match(await page.locator('#wbHistory').innerText(),/已收款/);
+  if(identityOnly){
+   await clickAction('[data-history-reference="select"]','history_reference_select');const original=(await read()).matter.history_reference;
+   await page.reload({waitUntil:'domcontentloaded'});await idle();await history();assert.equal((await read()).check.status,'valid');await shot('identity-1-original-reference');
+   await page.locator('#openInquiry').click();await page.locator('#wbQuantity').fill('9');await clickAction('#wbAnalyze','inquiry');await history();const changed=await read();
+   assert.equal(changed.matter.inquiry_request.terms.customer_id,'AC-SYNTH');assert.equal(changed.matter.inquiry_request.terms.project_id,'OP-SYNTH');assert.equal(changed.matter.inquiry_request.terms.quantity,'9');
+   assert.equal(await page.evaluate(()=>state.history_connection.status),'ready_records');assert.equal(changed.check.status,'context_changed');assert.deepEqual(changed.matter.history_reference,original);assert.equal(await page.locator('[data-history-reference="select"]').first().isVisible(),true);await shot('identity-2-quantity-changed-old-reference-inactive');
+   await clickAction('[data-history-reference="select"]','history_reference_select');await page.reload({waitUntil:'domcontentloaded'});await idle();await history();const final=await read();
+   assert.equal(final.check.status,'valid');assert.equal(final.matter.history_reference.context.inquiry_request.terms.quantity,'9');assert.equal(final.matter.inquiry_request.terms.customer_id,'AC-SYNTH');assert.equal(final.matter.inquiry_request.terms.project_id,'OP-SYNTH');assert.deepEqual(final.matter.previous_history_references,[original]);
+   for(const key of ['values','private_rows','history','quote_records'])assert.deepEqual(final.matter[key],initial[key]);assert.deepEqual(external,[]);assert.deepEqual(errors,[]);await shot('identity-3-explicit-new-reference-reopened');
+   const result={status:'HISTORY_IDENTITY_RETENTION_GUI_PASS',screenshots:3,viewport:'1512x828',realAdapterAndStore:true,syntheticEnvelope:true,realProvider:false,customerAndProjectRetained:true,quantityChangedTo9:true,historyReadyRecords:true,oldReferenceInactiveUntilExplicitSelection:true,newReferenceValidAfterExplicitSelectionAndReload:true,originalReferenceArchived:true,sourceAndSavedPricesUnchanged:true,adjustmentHistory:0,quoteRecords:0,sandbox:true,externalRequests:0,oldFiveSceneMatrixNotRun:true};fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));return;
+  }
   await clickAction('[data-history-reference="select"]','history_reference_select');const saved=(await read()).matter.history_reference;
   assert.equal(saved.reference.record_id,'PE-SYNTH');assert.equal(JSON.stringify(saved).includes('120.3456'),false);
   await page.reload({waitUntil:'domcontentloaded'});await idle();await history();assert.equal((await read()).check.status,'valid');assert.deepEqual((await read()).matter.history_reference,saved);

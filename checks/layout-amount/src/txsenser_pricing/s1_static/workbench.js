@@ -200,7 +200,17 @@ const Workbench = (() => {
   }
   for(const id of ['wbCustomer','wbProject','wbProduct','wbMarket','wbApplication','wbRole','wbCurrency','wbUnit','wbConditions','wbQuantity','wbAmount','wbReason'])node(id).oninput=node(id).onchange=()=>{quoteEditGeneration++;formDirty=true;node('wbQuoteConfirm').disabled=true;node('wbAcknowledged').checked=false;if(privateInquiry()){inquiryGeneration++;inquiryDirty=true;for(const host of ['wbAnalysis','wbHistory'])node(host).replaceChildren(elem('p','询价条件已变化，请重新核对并保存；旧结果不代表当前输入。'));}};
  }
- function terms(){return Object.fromEntries([['customer_id','wbCustomer'],['project_id','wbProject'],['product_id','wbProduct'],['market','wbMarket'],['application','wbApplication'],['role','wbRole'],['quantity','wbQuantity'],['currency','wbCurrency'],['unit','wbUnit'],['conditions','wbConditions']].map(([key,id])=>[key,node(id).value]));}
+ function terms(){
+  const result=Object.fromEntries([['customer_id','wbCustomer'],['project_id','wbProject'],['product_id','wbProduct'],['market','wbMarket'],['application','wbApplication'],['role','wbRole'],['quantity','wbQuantity'],['currency','wbCurrency'],['unit','wbUnit'],['conditions','wbConditions']].map(([key,id])=>[key,node(id).value]));
+  if(privateInquiry()){
+   // Private identity comes only from this matter's saved server response, not
+   // hidden demo selectors or a cached identity from another matter. C1 still
+   // validates its ownership/scope on every read; retaining it grants nothing.
+   const saved=state.matter.id===mid()&&state.matter.inquiry_request&&state.matter.inquiry_request.terms;
+   for(const key of ['customer_id','project_id'])result[key]=saved&&typeof saved[key]==='string'?saved[key]:'';
+  }
+  return result;
+ }
  function quoteInput(){return {terms:terms(),amount:node('wbAmount').value,...(correction?{quote_id:correction.id,expected_version:correction.version,reason:node('wbReason').value}:{})};}
  function describeTerms(t){const options=state.workbench;const product=options.products.find(p=>p.id===t.product_id);return [options.customers[t.customer_id],options.projects[t.project_id],product?product.label:t.product_id,t.market,t.application,t.role,'数量 '+t.quantity,t.currency+'/'+t.unit,t.conditions].join(' · ');}
  function renderDiscussion(data){

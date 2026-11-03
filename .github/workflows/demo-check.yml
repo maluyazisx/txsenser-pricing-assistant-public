@@ -46,14 +46,14 @@ jobs:
         env:
           NODE_PATH: ${{ runner.temp }}/preview-driver/node_modules
           CHROME_PATH: /usr/bin/google-chrome
-        run: node tests/browser_history_reference.cjs
+        run: node tests/browser_history_reference.cjs --identity-retention
       - name: Retain only affected synthetic browser evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pricing-synthetic-browser-${{ github.sha }}
           path: |
-            checks/layout-amount/test-results/history-reference/history-*.png
-            checks/layout-amount/test-results/history-reference/result.json
+            checks/layout-amount/test-results/history-identity/identity-*.png
+            checks/layout-amount/test-results/history-identity/result.json
           if-no-files-found: error
           retention-days: 7
 
