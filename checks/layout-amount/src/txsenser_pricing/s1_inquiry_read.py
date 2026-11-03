@@ -1,9 +1,10 @@
 """Private reference inquiries; no price qualification or shared-history writes."""
 from copy import deepcopy
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 
 from .product_pricing_contracts import CONTRACT_VERSION, HistoricalPricingQuery, ReadEnvelope
-from .product_pricing_read_zh import present_read_result_zh
+from .product_pricing_read_zh import present_read_result_zh, _STAGES
 
 FIELDS = ('customer_id', 'project_id', 'product_id', 'market', 'application', 'role',
           'quantity', 'currency', 'unit', 'conditions')
@@ -94,6 +95,100 @@ class C1HistoryReadAdapter:
         except Exception:
             # Never turn provider errors into absence, or expose private paths/errors.
             return history_state('unavailable')
+
+
+REFERENCE_FIELDS = ('publication_id', 'publication_digest', 'record_id',
+                    'revision_id', 'revision_digest', 'stage_fact_id')
+
+
+def exact_reference(value):
+    if (not isinstance(value, dict) or set(value) != set(REFERENCE_FIELDS)
+            or any(not isinstance(value[k], str) or not 1 <= len(value[k]) <= 256
+                   for k in REFERENCE_FIELDS)):
+        raise InquiryRejected('历史依据标识不完整，请重新读取后选择。')
+    return {key: value[key] for key in REFERENCE_FIELDS}
+
+
+def reference_options(history):
+    """Only identities actually returned by the already scoped read, never amounts."""
+    if history.get('status') != 'ready_records':
+        return []
+    options = []
+    for record in history.get('records', []):
+        for fact in record.get('stage_facts', []):
+            if (fact.get('stage_kind') in ('historical_fact_corrected', 'historical_fact_retracted', 'applicability_superseded')
+                    or fact.get('current_applicability') in ('corrected', 'retracted')):
+                continue
+            try:
+                reference = exact_reference(dict(publication_id=history.get('publication_id'),
+                    publication_digest=history.get('publication_digest'), record_id=record.get('record_id'),
+                    revision_id=record.get('revision_id'), revision_digest=record.get('revision_digest'),
+                    stage_fact_id=fact.get('stage_fact_id')))
+            except InquiryRejected:
+                continue
+            label = [_STAGES.get(fact.get('stage_kind'), '历史记录'), str(fact.get('occurred_at') or '日期未提供')]
+            nature = {'total_received': '收款总额', 'unit_price': '历史单价', 'total': '记录总额'}.get(fact.get('amount_nature'), '记录金额')
+            try:
+                amount = Decimal(str(fact.get('amount')))
+                if not amount.is_finite(): raise InvalidOperation()
+                rounded = amount.quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+                label.append(nature+('约 ' if rounded != amount else ' ')+format(rounded, ',f')+' '+str(fact.get('currency') or '币种未提供'))
+            except (InvalidOperation, ValueError):
+                label.append('金额未提供')
+            customer = record.get('customer_link', {}).get('literal')
+            if isinstance(customer, str) and customer: label.append(customer)
+            options.append(dict(reference=reference, label=' · '.join(label)))
+    # An ambiguous repeated identity is not a selectable reference.
+    return [item for item in options if sum(x['reference'] == item['reference'] for x in options) == 1]
+
+
+def select_history_reference(request, history, proposed):
+    reference = exact_reference(proposed)
+    if not request or not any(item['reference'] == reference for item in reference_options(history)):
+        raise InquiryRejected('这条依据未在本次授权查询中返回，未保存。请重新核对后选择。')
+    return dict(schema='private-history-reference.v1', reference=reference,
+        context=dict(inquiry_request=deepcopy(request), queried_scope=deepcopy(history['queried_scope'])),
+        selected_as_of=history['as_of'], knowledge_as_of=history['knowledge_as_of'])
+
+
+def history_reference_state(request, saved, history, checked_as_of):
+    result = dict(status='none', message='', options=reference_options(history),
+                  saved=deepcopy(saved), checked_as_of=checked_as_of)
+    if not saved:
+        return result
+    def outcome(status, message):
+        return dict(result, status=status, message=message)
+    if saved.get('context', {}).get('inquiry_request') != request:
+        return outcome('context_changed', '询价条件或身份已变化；原引用保留，不作为本次询价依据。')
+    connection = history.get('status')
+    if connection == 'not_connected':
+        return outcome('not_connected', '历史尚未接通；原引用保留，暂未重新核对。')
+    if connection not in ('ready_records', 'ready_empty'):
+        return outcome('unavailable', '暂时无法核对原依据；不能确认仍适用。')
+    if saved['context'].get('queried_scope') != history.get('queried_scope'):
+        return outcome('scope_changed', '历史读取范围已变化；原引用保留，不自动沿用。')
+    reference = saved['reference']
+    # Only a returned, target-specific fact proves correction/withdrawal. Empty
+    # results (including C1's overloaded "retracted" reason) do not prove either.
+    for record in history.get('records', []):
+        if record.get('record_id') != reference['record_id']:
+            continue
+        for fact in record.get('stage_facts', []):
+            if fact.get('predecessor_fact_ref') == reference['stage_fact_id']:
+                if fact.get('stage_kind') == 'historical_fact_retracted':
+                    return outcome('withdrawn', '已查到这条原依据的撤回记录；原引用保留，不能继续沿用。')
+                if fact.get('stage_kind') == 'historical_fact_corrected':
+                    return outcome('changed', '已查到这条原依据的更正记录；原引用保留，请重新选择。')
+    if any(item['reference'] == reference for item in result['options']):
+        item = next(item for item in result['options'] if item['reference'] == reference)
+        return dict(outcome('valid', '这条历史依据与保存时一致，可供本次询价参考；不代表正式报价。'), label=item['label'])
+    if (history.get('publication_id'), history.get('publication_digest')) != (reference['publication_id'], reference['publication_digest']):
+        return outcome('changed', '历史资料版本已变化；原引用保留，请重新核对，不自动替换。')
+    if any(record.get('record_id') == reference['record_id'] and
+           (record.get('revision_id'), record.get('revision_digest')) != (reference['revision_id'], reference['revision_digest'])
+           for record in history.get('records', [])):
+        return outcome('changed', '这条历史依据的版本已变化；原引用保留，不自动替换。')
+    return outcome('unavailable', '当前查询未返回这条原依据，不能确认仍适用，也不能据此判断已撤回。')
 
 
 def analyze_reference(terms, rows, *, as_of, history_reader=None):

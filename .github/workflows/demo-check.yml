@@ -34,7 +34,7 @@ jobs:
           python3 -m py_compile src/txsenser_pricing/s1_demo.py src/txsenser_pricing/s1_workbench.py src/txsenser_pricing/s1_inquiry_read.py src/txsenser_pricing/product_pricing_contracts.py src/txsenser_pricing/product_pricing_read_zh.py
           node --check src/txsenser_pricing/s1_static/app.js
           node --check src/txsenser_pricing/s1_static/workbench.js
-          node --check tests/browser_private_inquiry.cjs
+          node --check tests/browser_history_reference.cjs
       - name: Prepare only the browser driver
         run: npm install --prefix "$RUNNER_TEMP/preview-driver" --no-save --ignore-scripts playwright@1.55.1
       - name: Add Chinese fonts to the disposable cloud runner
@@ -42,19 +42,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends fonts-noto-cjk
           fc-match 'sans-serif:lang=zh-cn' | grep -q 'NotoSansCJK'
-      - name: Check private discussion and inquiry in one synthetic browser
+      - name: Check scoped history references in one synthetic browser
         env:
           NODE_PATH: ${{ runner.temp }}/preview-driver/node_modules
           CHROME_PATH: /usr/bin/google-chrome
-        run: node tests/browser_private_inquiry.cjs
+        run: node tests/browser_history_reference.cjs
       - name: Retain only affected synthetic browser evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pricing-synthetic-browser-${{ github.sha }}
           path: |
-            checks/layout-amount/test-results/private-inquiry/inquiry-*.png
-            checks/layout-amount/test-results/private-inquiry/usability-*.png
-            checks/layout-amount/test-results/private-inquiry/result.json
+            checks/layout-amount/test-results/history-reference/history-*.png
+            checks/layout-amount/test-results/history-reference/result.json
           if-no-files-found: error
           retention-days: 7
 

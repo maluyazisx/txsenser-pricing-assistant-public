@@ -1,5 +1,5 @@
 {
-  "kind": "SYNTHETIC_SCOPED_INQUIRY_CHECK_FILES_NOT_A_FULL_PUBLIC_RELEASE",
+  "kind": "SANITIZED_SYNTHETIC_BROWSER_CHECK_FIXTURE",
   "files": [
     {
       "path": "src/txsenser_pricing/__init__.py",
@@ -7,44 +7,19 @@
       "sha256": "21414e791007d1eb87cc5637ffe4264abe8d37850804df5e13f30bbdc64b49f7"
     },
     {
+      "path": "src/txsenser_pricing/s1_demo.py",
+      "bytes": 42875,
+      "sha256": "b0ac9c118bb9405a4ac7b68a275391485dd821bf7503c7f21876d6569af55621"
+    },
+    {
       "path": "src/txsenser_pricing/s1_workbench.py",
       "bytes": 11777,
       "sha256": "117195d00d802d646e666fe270b701397001d1d76a5d71492ce54671154d8fb7"
     },
     {
-      "path": "src/txsenser_pricing/s1_static/app.js",
-      "bytes": 25313,
-      "sha256": "1448400a87969cdfb6dd304e7145dfab37f521e8a620da3e05c7f32f089755f3"
-    },
-    {
-      "path": "src/txsenser_pricing/s1_static/fx.js",
-      "bytes": 3146,
-      "sha256": "c8cc629b2dae94504ba890a2993fbd2382c02b8dfa53f3cfacb6b311cab4533e"
-    },
-    {
-      "path": "src/txsenser_pricing/s1_static/style.css",
-      "bytes": 15955,
-      "sha256": "1ca8c55637e4e2577298d2f79fd3bad79f5a3e367af0938834ef31ac2ba39d85"
-    },
-    {
-      "path": "src/txsenser_pricing/s1_demo.py",
-      "bytes": 40123,
-      "sha256": "7d1450e09d6e75f8d90b315e5f1cf6f53ff68a576830b176c713576d2fb14c73"
-    },
-    {
-      "path": "src/txsenser_pricing/s1_static/workbench.js",
-      "bytes": 43043,
-      "sha256": "1821a987585fd37f3ec5d50f354e5a2c72673dc853eb1e0bb3e47cfe8ac5a6cd"
-    },
-    {
-      "path": "src/txsenser_pricing/s1_static/index.html",
-      "bytes": 9741,
-      "sha256": "b184c81f7d6042158782a821bba5e964f3bb39eae275750ffb94f475785401d1"
-    },
-    {
       "path": "src/txsenser_pricing/s1_inquiry_read.py",
-      "bytes": 8118,
-      "sha256": "87f1f9153ed519a3a8a453dd32d10ce5bbc222190ed81375601fa0c7efeba937"
+      "bytes": 14474,
+      "sha256": "a23bf2a39a754d12763a61efe2f6e79bbf0457f83497e5b83377c22727ad03bf"
     },
     {
       "path": "src/txsenser_pricing/product_pricing_contracts.py",
@@ -57,9 +32,34 @@
       "sha256": "5675e130fe1ab00ed5e2b396884462a3229fe2b57e9e6bb613a8ea066d2bdfc7"
     },
     {
-      "path": "tests/browser_private_inquiry.cjs",
-      "bytes": 16309,
-      "sha256": "b3d3eacfe04c778f524a3e684b87ce3317285180c12ef0c31b34a621c34df50c"
+      "path": "src/txsenser_pricing/s1_static/app.js",
+      "bytes": 25313,
+      "sha256": "1448400a87969cdfb6dd304e7145dfab37f521e8a620da3e05c7f32f089755f3"
+    },
+    {
+      "path": "src/txsenser_pricing/s1_static/workbench.js",
+      "bytes": 47559,
+      "sha256": "e38a1945af61027b3a53a08af951f99a86f890fc71a5a7e268521cbdfa2ad0ee"
+    },
+    {
+      "path": "src/txsenser_pricing/s1_static/index.html",
+      "bytes": 9741,
+      "sha256": "b184c81f7d6042158782a821bba5e964f3bb39eae275750ffb94f475785401d1"
+    },
+    {
+      "path": "src/txsenser_pricing/s1_static/fx.js",
+      "bytes": 3146,
+      "sha256": "c8cc629b2dae94504ba890a2993fbd2382c02b8dfa53f3cfacb6b311cab4533e"
+    },
+    {
+      "path": "src/txsenser_pricing/s1_static/style.css",
+      "bytes": 15955,
+      "sha256": "1ca8c55637e4e2577298d2f79fd3bad79f5a3e367af0938834ef31ac2ba39d85"
+    },
+    {
+      "path": "tests/browser_history_reference.cjs",
+      "bytes": 11580,
+      "sha256": "4986f2e94412d9289db00ece6576d8aa0972cc3b401a51c67a08397ff1d2f686"
     }
   ]
 }

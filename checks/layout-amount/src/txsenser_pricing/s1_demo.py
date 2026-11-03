@@ -12,7 +12,8 @@ import time
 from urllib.parse import parse_qs, urlsplit
 import uuid
 
-from .s1_inquiry_read import InquiryRejected, analyze_reference, normalize_terms, history_state
+from .s1_inquiry_read import (InquiryRejected, analyze_reference, normalize_terms, history_state,
+                            select_history_reference, history_reference_state)
 from .s1_workbench import (CATALOG_ID, DEMO_MATTER, MATRIX_ROWS, LEGACY_MATRIX_ROWS, CUSTOMERS, PROJECTS, ROLES, PRICE_TYPE_ORDER, PRICE_TYPE_LABELS, CONDITIONS, OPS,
     WorkbenchRejected, analyze, prepare_quote, confirm_quote, replay_quote)
 
@@ -263,6 +264,11 @@ class Store:
     def state(self, mid):
         with self.connect() as db:
             m = self.read(db, mid)
+            if m.get('data_kind') == 'private_experience' and m.get('persona') != 'ceo':
+                # Defense in depth for the new fields: do not expose CEO history
+                # identities/context through a non-CEO read projection.
+                m.pop('history_reference', None)
+                m.pop('previous_history_references', None)
             summaries = [dict(id=x['id'], title=x['title'], parent=x['parent'], created=x['created']) for x in [json.loads(p) for (p,) in db.execute('SELECT payload FROM matters')]]
             history = self.workbench_history(db) if m.get('fixture_set') == CATALOG_ID and m.get('data_kind') != 'private_experience' else []
         rows = catalog(m)
@@ -278,10 +284,13 @@ class Store:
             if private:
                 request = m.get('inquiry_request')
                 reader = self.history_reader if m.get('persona') == 'ceo' else None
+                checked_as_of = now()  # Recheck now; the saved inquiry's original time is retained.
                 result['inquiry_read'] = (analyze_reference(request['terms'], rows,
-                    as_of=request['as_of'], history_reader=reader) if request else None)
+                    as_of=checked_as_of, history_reader=reader) if request else None)
                 result['history_connection'] = (result['inquiry_read']['history'] if result['inquiry_read'] else
                     history_state('not_connected' if reader is None else 'identity_unresolved'))
+                result['history_reference'] = history_reference_state(request,
+                    m.get('history_reference'), result['history_connection'], checked_as_of)
         return result
 
     def context(self, m):
@@ -428,6 +437,31 @@ class Store:
                         m['proposal']=dict(edits=pending['proposal_edits'],generation=m['generation'],revision=m['revision'],selected=m['selected'][:],filters=copy.deepcopy(m['filters']))
                     pending['status'] = 'completed'
                     m['conversation'].append(dict(at=now(), role='assistant', text='模拟AI明确命令已写入同一合成草稿；未批准、未发布。' if pending['edits'] else pending['answer'], request=token))
+            elif op in ('history_reference_select', 'history_reference_remove'):
+                if m.get('data_kind') != 'private_experience' or m.get('persona') != 'ceo':
+                    raise Rejected('当前身份不能保存历史依据引用。')
+                request = m.get('inquiry_request')
+                if not request or req.get('inquiry_request') != request:
+                    raise Rejected('询价条件已变化或尚未保存，请先重新核对。')
+                old = m.get('history_reference')
+                if op == 'history_reference_select':
+                    history = analyze_reference(request['terms'], rows, as_of=now(),
+                        history_reader=self.history_reader)['history']
+                    if req.get('queried_scope') != history.get('queried_scope') or not history.get('queried_scope'):
+                        raise Rejected('历史读取范围已变化，请重新读取后选择；未保存。')
+                    try: selected = select_history_reference(request, history, req.get('reference'))
+                    except (InquiryRejected, KeyError) as e:
+                        raise Rejected('这条依据未通过本次授权查询核对，未保存。') from e
+                    if old and old['reference'] == selected['reference'] and old['context'] == selected['context']:
+                        selected = old
+                else:
+                    if not old or req.get('reference') != old['reference']:
+                        raise Rejected('待移除的引用已变化，请重新读取。')
+                    selected = None
+                if old and old != selected:
+                    # Preserve only the original citation/context, never historical facts.
+                    m.setdefault('previous_history_references', []).append(copy.deepcopy(old))
+                m['history_reference'] = selected
             elif op in OPS:
                 if m.get('fixture_set') != CATALOG_ID:
                     raise Rejected('此操作仅用于新的虚构工作台事项。')
@@ -450,7 +484,9 @@ class Store:
                             try: terms = normalize_terms(req.get('terms'))
                             except InquiryRejected as e: raise WorkbenchRejected(str(e)) from e
                             # Persist only the inquiry inputs, never copy shared history into this Store.
-                            m['inquiry_request'] = dict(schema='private-inquiry-request.v1', terms=terms, as_of=now())
+                            if m.get('inquiry_request', {}).get('terms') != terms:
+                                m['inquiry_request'] = dict(schema='private-inquiry-request.v1', terms=terms,
+                                    as_of=now(), context_id=uuid.uuid4().hex)
                         else:
                             m['inquiry'] = analyze(req.get('terms'), rows, self.workbench_history(db))
                             result['analysis'] = copy.deepcopy(m['inquiry'])

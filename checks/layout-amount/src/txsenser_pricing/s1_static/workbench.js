@@ -5,7 +5,7 @@ const Workbench = (() => {
  let initialized=false,formDirty=false,correction=null,quoteEditGeneration=0,pane='prices',editing=false,detailRowId=null;
  let pending=null,resolutionNotice='',batchMode=false,previousSelection=[],draftEditGeneration=0,invalidDraftToken=null,exportBusy=false,activePanel=null,returnFocus=null,shownPreviewKey=null;
  let exportScopeGeneration=0;
- let inquiryDirty=false,inquiryGeneration=0;
+ let inquiryDirty=false,inquiryGeneration=0,historyReferenceControls=[];
  function scopeIntent(){exportScopeGeneration++;}
  try{const raw=typeof sessionStorage!=='undefined'&&sessionStorage.getItem('s1-workbench-pending');if(raw){const p=JSON.parse(raw);if(p&&p.op==='quote_confirm'&&typeof p.matter==='string'&&typeof p.request_id==='string'&&typeof p.token==='string')pending=p;}}catch(_){}
  const node=id=>document.getElementById(id);
@@ -25,6 +25,14 @@ const Workbench = (() => {
   return '报价保存结果待核，尚未找到对应确认回执；请重新载入核对，勿重复提交。';
  }
  function accepted(op,extra,before,data,requestId){
+  if(op==='history_reference_select'||op==='history_reference_remove'){
+   if(!['values','private_rows','history','quote_records'].every(key=>same(before[key],data.matter[key])))return false;
+   const saved=data.matter.history_reference;
+   const old=before.history_reference,archived=before.previous_history_references||[],retired=old&&(op==='history_reference_remove'||!saved||!same(old.reference,saved.reference)||!same(old.context,saved.context));
+   if(!same(data.matter.previous_history_references||[],retired?[...archived,old]:archived))return false;
+   if(op==='history_reference_remove')return saved===null;
+   return !!(saved&&saved.schema==='private-history-reference.v1'&&same(saved.reference,extra.reference)&&same(saved.context.inquiry_request,extra.inquiry_request)&&same(saved.context.queried_scope,extra.queried_scope));
+  }
   if(op==='inquiry'&&before.data_kind==='private_experience')return !!(data.matter.inquiry_request&&data.matter.inquiry_request.schema==='private-inquiry-request.v1'&&same(data.matter.inquiry_request.terms,extra.terms)&&data.inquiry_read&&data.inquiry_read.kind==='private_reference_inquiry'&&same(data.inquiry_read.terms,extra.terms)&&data.inquiry_read.execution_allowed===false);
   if(op==='quote_confirm'){
    const record=data.record,receipt=data.matter.quote_receipts&&data.matter.quote_receipts[extra.token];
@@ -42,7 +50,7 @@ const Workbench = (() => {
   if(!current()||busy||loading||writeBlockReason)return false;const m=state.matter,p=m.draft_preview;
   return !!(p&&p.token!==invalidDraftToken&&p.prepared_version===m.version&&Array.isArray(p.edits)&&p.edits.every(edit=>{const input=inputsFor(m.id).get(edit.id);return !input||sameAmount(input.value,edit.new)&&input.old===edit.old&&same(input.scope,edit.scope);}));
  }
- function syncDraftConfirm(){node('draftConfirm').disabled=!canConfirmDraft();if(current()){syncEditing();syncExportSummary(state);}}
+ function syncDraftConfirm(){node('draftConfirm').disabled=!canConfirmDraft();for(const button of historyReferenceControls)button.disabled=busy||loading||!!writeBlockReason||inquiryDirty;if(current()){syncEditing();syncExportSummary(state);}}
  function visibleRoles(data){const filters=data.matter.filters,roles=data.workbench.roles;if(Array.isArray(filters.price_types))return roles.filter(r=>filters.price_types.includes(r));return filters.role?roles.filter(r=>r===filters.role):roles;}
  function selectable(row){return row.baseline!==null&&!row.blocked&&row.copy_editable!==false&&state.visible_ids.includes(row.id);}
  function selectionReason(row){return row.copy_editable===false?'当前权限仅可查看此价格。':row.blocked||row.risk||'该范围尚无可调整的参考价格。';}
@@ -211,6 +219,34 @@ const Workbench = (() => {
    if(h.detail){const details=elem('details');details.append(elem('summary','查看历史依据与适用限制'),elem('div',h.detail,'history-entry'));host.append(details);}
   }
  }
+ function referenceInputsMatch(request){return !!(request&&Object.entries(terms()).every(([key,value])=>['customer_id','project_id'].includes(key)||request.terms[key]===value));}
+ async function changeHistoryReference(op,reference,request,matter,queriedScope){
+  if(inquiryDirty||!referenceInputsMatch(request)||state.matter.id!==matter||!same(state.matter.inquiry_request,request)){status('询价条件已变化，请先核对并保存；原引用未改。',true);return null;}
+  const generation=inquiryGeneration;
+  const result=await act(op,{reference,inquiry_request:request,queried_scope:queriedScope});
+  if(result){inquiryDirty=inquiryDirty||generation!==inquiryGeneration||!referenceInputsMatch(request)||state.matter.id!==matter;renderAll();status(inquiryDirty?'原条件的引用操作已保存；新输入保留，请重新核对。':op==='history_reference_remove'?'已移除本次引用，原引用记录保留。':'历史引用已保存；请以页面复核结果判断能否继续参考。',inquiryDirty);}
+  return result;
+ }
+ function renderHistoryReference(host,data){
+  historyReferenceControls=[];
+  const check=data.history_reference;if(!check)return;
+  const saved=check.saved,previous=data.matter.previous_history_references||[];
+  if(saved){
+   host.append(elem('strong','已保存的历史依据'),elem('p',check.label||'原记录摘要目前无法重新取得；原询价条件仍可查看。'),elem('p',check.message));
+   host.append(elem('p','原引用时点：'+saved.selected_as_of+'；本次复核时点：'+check.checked_as_of));
+  }
+  if(saved||previous.length){
+   const details=elem('details');details.append(elem('summary','查看原引用与询价条件'));
+   for(const item of [...previous,...(saved?[saved]:[])]){const t=item.context.inquiry_request.terms,product=data.workbench.products.find(p=>p.id===t.product_id);details.append(elem('p',[product?product.label:'原产品配置',t.market,t.application,typeLabel(t.role),t.quantity?'数量 '+t.quantity:'数量未填写',t.currency+'/'+t.unit,t.conditions].join(' · ')),elem('p','原询价时点：'+item.context.inquiry_request.as_of+'；引用时点：'+item.selected_as_of));}
+   host.append(details);
+  }
+  if(data.matter.persona!=='ceo'||data.history_connection.status!=='ready_records'||!check.options.length||!data.matter.inquiry_request)return;
+  const request=JSON.parse(JSON.stringify(data.matter.inquiry_request)),matter=data.matter.id,queriedScope=JSON.parse(JSON.stringify(data.history_connection.queried_scope));
+  const controls=elem('div');controls.dataset.historyReferences='true';controls.append(elem('p','选择一条已核对的历史依据，仅保存引用，不套用金额。'));
+  check.options.forEach((item,index)=>{const button=elem('button','引用：'+item.label);button.type='button';button.dataset.historyReference='select';button.disabled=busy||loading||!!writeBlockReason||inquiryDirty;button.onclick=()=>changeHistoryReference('history_reference_select',item.reference,request,matter,queriedScope);controls.append(button);historyReferenceControls.push(button);});
+  if(saved){const remove=elem('button','移除本次引用');remove.type='button';remove.dataset.historyReference='remove';remove.disabled=busy||loading||!!writeBlockReason||inquiryDirty;remove.onclick=()=>changeHistoryReference('history_reference_remove',saved.reference,request,matter,queriedScope);controls.append(remove);historyReferenceControls.push(remove);}
+  host.append(controls);
+ }
  function renderPrivateInquiry(data){
   node('wbAnalyze').textContent='核对价格并保存';node('wbQuotePrepare').disabled=true;node('wbQuoteConfirm').disabled=true;
   const analysis=data.inquiry_read;node('wbAnalysis').replaceChildren();node('wbHistory').replaceChildren();
@@ -224,6 +260,7 @@ const Workbench = (() => {
    renderReadHistory(node('wbAnalysis'),analysis.history);
   }else node('wbAnalysis').append(elem('p','选择产品和销售方式后，核对本次询价。'));
   renderReadHistory(node('wbHistory'),data.history_connection);
+  renderHistoryReference(node('wbHistory'),data);
  }
  function render(data){
   const enabled=data.matter.fixture_set===CATALOG;node('openPrices').hidden=pane==='prices';node('businessWorkbench').hidden=!enabled||pane==='prices';node('roleViewControls').hidden=!enabled;node('inquirySection').hidden=pane==='history';node('quoteSection').hidden=pane!=='quote';node('historySection').hidden=pane!=='history';
